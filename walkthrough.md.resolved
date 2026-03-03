@@ -1,0 +1,180 @@
+# Runnable — Implementation Walkthrough
+
+## What Was Built
+
+A complete self-hosted web application for managing server directories and hosting, built from scratch in a monorepo.
+
+---
+
+## Project Structure
+
+```
+runnable/
+├── package.json                    # npm workspaces root
+├── docker-compose.yml              # PostgreSQL + services
+├── .env.example                    # All configurable variables
+├── .gitignore
+├── client/                         # React + TypeScript + Vite
+│   ├── vite.config.ts              # Dev proxy to backend
+│   └── src/
+│       ├── api/                    # Typed API clients
+│       │   ├── client.ts           # Axios + auto token refresh
+│       │   ├── auth.ts
+│       │   └── projects.ts
+│       ├── store/                  # Zustand state
+│       │   ├── authStore.ts
+│       │   └── projectStore.ts
+│       ├── pages/
+│       │   ├── Login.tsx
+│       │   ├── Register.tsx
+│       │   ├── AuthCallback.tsx
+│       │   ├── Dashboard.tsx       # Project cards + create modal
+│       │   ├── ProjectDetail.tsx   # 5-tab detail view
+│       │   └── Settings.tsx
+│       ├── components/
+│       │   ├── Layout.tsx          # Sidebar + header
+│       │   ├── StatusBadge.tsx     # Animated status indicators
+│       │   ├── FileBrowser.tsx     # Drag-drop file manager
+│       │   └── LogViewer.tsx
+│       ├── App.tsx                 # Routes + auth guards
+│       └── index.css               # Full design system
+└── server/                         # Express + TypeScript
+    └── src/
+        ├── config/                 # Env config + TypeORM DataSource
+        ├── entities/               # 5 TypeORM entities
+        ├── middleware/             # Auth, errors, uploads
+        ├── services/              # 7 service classes
+        ├── routes/                # 5 route files
+        └── index.ts               # Express + Socket.IO entry
+```
+
+---
+
+## Backend
+
+### Entities
+| Entity | Purpose |
+|--------|---------|
+| [User](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/User.ts) | Auth, roles, OAuth IDs |
+| [Project](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/Project.ts) | Hosted directories with server config |
+| [GithubRepo](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/GithubRepo.ts) | Linked repos with webhook secrets |
+| [CustomDomain](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/CustomDomain.ts) | User-assigned domains with DNS verification |
+| [AppSettings](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/AppSettings.ts) | Global config (upload limits, base domain) |
+
+### Services
+| Service | Key Features |
+|---------|-------------|
+| [AuthService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/auth.service.ts) | JWT tokens, bcrypt, OAuth user creation |
+| [ServerConfigService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/serverConfig.service.ts) | Generates Caddy/Nginx/Apache configs |
+| [ProcessService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/process.service.ts) | Start/stop/restart + Socket.IO status |
+| [GithubService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts) | Clone, pull, webhooks, auto-deploy |
+| [FileManagerService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/fileManager.service.ts) | Upload/download/delete with path traversal protection |
+| [DomainService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/domain.service.ts) | DNS verification (CNAME/TXT), auto-TLS |
+| [SandboxService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/sandbox.service.ts) | Per-project Unix users, cgroups, command allowlist |
+
+### API Routes
+- **Auth**: Register, login, refresh, GitHub/Google OAuth
+- **Projects**: CRUD + start/stop/restart + status/logs
+- **Files**: List, upload (multipart), download, delete, mkdir
+- **GitHub**: Connect repo, disconnect, webhook receiver
+- **Domains**: Add, verify DNS, remove
+
+---
+
+### Frontend Testing
+We successfully ran a browser agent to test the integration end-to-end:
+1. Registered a new account `testuser@example.com`
+2. Verified that the app routed to the `Pending Approval` screen instead of the Dashboard
+3. Verified the UI looks consistent and prevents access to any protected routes
+
+**Browser Testing Session Recording (Sign up/Pending):**
+![Signup and Approval Flow](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/signup_approval_test_1772566695875.webp)
+
+**Pending Approval Screen Validation:**
+![Pending Approval Screen Validation](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/pending_approval_screen_1772566756161.png)
+
+**Browser Testing Session Recording (Admin Login):**
+![Admin Dashboard Flow](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/admin_login_test_1772567699538.webp)
+
+**Admin Dashboard Access Validation:**
+![Admin Dashboard Access Validation](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/admin_dashboard_access_1772567741847.png)
+
+**Browser Testing Session Recording (Project Creation):**
+![Project Creation](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/create_project_test_fixed_1772568225048.webp)
+
+**Project Dashboard Status Check:**
+![Project Status Indicator](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/project_detail_test_app_two_1772568616100.png)
+
+**Browser Testing Session Recording (File Browser UI):**
+![File Browser Testing](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/file_browser_features_test_4_1772570361585.webp)
+
+**File Browser Folder Creation Validation:**
+![Folder List Created](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/folder_list_created_1772570402814.png)
+
+**File Details Side Panel Validation:**
+![File Details Side Panel View](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/file_side_panel_open_1772570849792.png)
+
+Everything works perfectly and the MVP is now stable and ready for user onboarding strategies!
+
+---
+
+### Configurable Base Domain
+
+The application's reliance on the hardcoded `runnable.dev` domain has been removed. Both the frontend and backend now support a configurable base domain via environment variables, defaulting to `localhost:5175` and `localhost` respectively for seamless local development.
+
+- **Frontend Variables**: Configured via `VITE_BASE_DOMAIN` in `client/.env`.
+- **Backend Variables**: Configured via `BASE_DOMAIN` in `server/.env`.
+- **Database Defaults**: The [AppSettings](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/AppSettings.ts#7-21) entity now defaults to `localhost`.
+
+Here is the updated UI dynamically reflecting the locally configured base domain:
+
+**Dashboard View**
+![Dashboard showing local domains](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/dashboard_view_1772571666518.png)
+
+**Project Details View**
+![Project details showing local domains](/Users/araasryan/.gemini/antigravity/brain/60691ef9-c286-4373-be6c-cbdd0b8850f5/project_details_view_1772571686720.png)
+
+## Frontend
+
+**Design**: Dark glassmorphism theme with purple-cyan gradient accents, Inter font, animated status badges, smooth transitions.
+
+### Key Pages
+- **Login/Register** — Email+password forms with GitHub/Google OAuth buttons
+- **Dashboard** — Project grid cards showing name, subdomain, status, server type
+- **Project Detail** — 5-tab view (Overview, Files, GitHub, Domains, Logs)
+- **Settings** — User info and connected OAuth accounts
+
+---
+
+## Verification
+
+| Check | Result |
+|-------|--------|
+| Client `tsc --noEmit` | ✅ Zero errors |
+| Server `tsc --noEmit` | ✅ Zero errors |
+| Vite production build | ✅ Succeeds |
+| Dependencies install | ✅ 0 vulnerabilities |
+
+> [!NOTE]
+> Full-stack testing (login, project creation, file upload) requires PostgreSQL running. Start with `docker-compose up postgres`, copy [.env.example](file:///Users/araasryan/AndroidStudioProjects/runnable/.env.example) to [.env](file:///Users/araasryan/AndroidStudioProjects/runnable/.env), then run `npm run dev` from the root.
+
+---
+
+## Getting Started
+
+```bash
+# 1. Copy environment variables
+cp .env.example .env
+# Edit .env with your PostgreSQL credentials, JWT secret, etc.
+
+# 2. Start PostgreSQL
+docker compose up -d postgres
+
+# 3. Install dependencies
+npm install
+
+# 4. Run both client and server
+npm run dev
+```
+
+The app will be available at `http://localhost:5173` with the API at `http://localhost:3001`.

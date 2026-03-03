@@ -1,0 +1,480 @@
+# Runnable — Self-Hosted Directory & Hosting Manager
+
+A web-based application for managing server directories, hosting them via Caddy/Apache/Nginx, integrating with GitHub for auto-deployment, and providing static file hosting — all accessible via `*.runnable.dev` subdomains.
+
+## Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "Client (React + TypeScript + Vite)"
+        UI[Web UI :5173]
+    end
+
+    subgraph "Server (Node.js + Express + TypeScript)"
+        API[REST API :3001]
+        WS[WebSocket Server]
+        PM[Process Manager]
+        GH[GitHub Webhook Handler]
+        FM[File Manager]
+    end
+
+    subgraph "Data Layer"
+        DB[(PostgreSQL)]
+        FS[Server Filesystem<br/>SERDIR]
+    end
+
+    subgraph "Managed Services"
+        CADDY[Caddy]
+        NGINX[Nginx]
+        APACHE[Apache]
+    end
+
+    UI --> API
+    UI --> WS
+    API --> DB
+    API --> FS
+    PM --> CADDY
+    PM --> NGINX
+    PM --> APACHE
+    GH --> FS
+    FM --> FS
+```
+
+**Tech Stack:**
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18, TypeScript, Vite, React Router, Zustand |
+| Backend | Node.js, Express, TypeScript, Socket.IO |
+| Database | PostgreSQL + [TypeORM](https://typeorm.io/) |
+| Auth | JWT (access + refresh tokens), bcrypt, Passport.js (GitHub/Google OAuth) |
+| File Uploads | Multer (configurable max size, default 512MB) |
+| Process Mgmt | `child_process` + systemd integration |
+
+---
+
+## Proposed Changes
+
+### 1. Project Scaffolding
+
+#### [NEW] Root project structure
+
+```
+runnable/
+├── package.json              # Workspace root
+├── docker-compose.yml        # PostgreSQL + app
+├── .env.example
+├── client/                   # React frontend
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── index.html
+│   └── src/
+└── server/                   # Express backend
+    ├── package.json
+    ├── tsconfig.json
+    ├── ormconfig.ts           # TypeORM configuration
+    └── src/
+```
+
+Uses npm workspaces to manage client and server as a monorepo.
+
+---
+
+### 2. Database Schema (TypeORM Entities)
+
+#### [NEW] [server/src/entities/](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/)
+
+TypeORM entity files:
+
+```typescript
+// User.ts
+@Entity()
+export class User {
+  @PrimaryGeneratedColumn("uuid") id: string;
+  @Column({ unique: true }) email: string;
+  @Column({ unique: true }) username: string;
+  @Column({ nullable: true }) passwordHash?: string;  // null for OAuth-only
+  @Column({ type: "enum", enum: Role, default: Role.USER }) role: Role;
+  @Column({ nullable: true, unique: true }) githubId?: string;
+  @Column({ nullable: true, unique: true }) googleId?: string;
+  @Column({ nullable: true }) githubToken?: string;   // encrypted
+  @OneToMany(() => Project, p => p.user) projects: Project[];
+  @CreateDateColumn() createdAt: Date;
+  @UpdateDateColumn() updatedAt: Date;
+}
+
+// Project.ts
+@Entity()
+export class Project {
+  @PrimaryGeneratedColumn("uuid") id: string;
+  @Column() name: string;
+  @Column({ unique: true }) subdomain: string;          // myapp → myapp.runnable.dev
+  @Column() directoryPath: string;
+  @Column({ type: "enum", enum: ServerType }) serverType: ServerType;
+  @Column({ type: "enum", enum: ServiceStatus, default: ServiceStatus.STOPPED }) status: ServiceStatus;
+  @Column({ nullable: true }) port?: number;
+  @Column({ nullable: true }) configPath?: string;
+  @ManyToOne(() => User, u => u.projects) user: User;
+  @OneToOne(() => GithubRepo, g => g.project) githubRepo?: GithubRepo;
+  @OneToMany(() => CustomDomain, d => d.project) customDomains: CustomDomain[];
+  @CreateDateColumn() createdAt: Date;
+  @UpdateDateColumn() updatedAt: Date;
+}
+
+// GithubRepo.ts
+@Entity()
+export class GithubRepo {
+  @PrimaryGeneratedColumn("uuid") id: string;
+  @Column() repoUrl: string;
+  @Column({ default: "main" }) branch: string;
+  @Column({ default: false }) isPrivate: boolean;
+  @Column({ nullable: true }) webhookId?: string;
+  @Column({ nullable: true }) webhookSecret?: string;
+  @Column({ nullable: true }) lastDeployAt?: Date;
+  @OneToOne(() => Project, p => p.githubRepo)
+  @JoinColumn()
+  project: Project;
+}
+
+// CustomDomain.ts — NEW: supports custom domains per project
+@Entity()
+export class CustomDomain {
+  @PrimaryGeneratedColumn("uuid") id: string;
+  @Column({ unique: true }) domain: string;             // e.g. "mysite.com"
+  @Column({ default: false }) sslProvisioned: boolean;   // auto-TLS via Caddy
+  @Column({ default: false }) verified: boolean;         // DNS verification
+  @ManyToOne(() => Project, p => p.customDomains) project: Project;
+  @CreateDateColumn() createdAt: Date;
+}
+
+// AppSettings.ts
+@Entity()
+export class AppSettings {
+  @PrimaryColumn({ default: "global" }) id: string;
+  @Column({ default: 512 }) maxUploadSizeMB: number;
+  @Column({ default: "runnable.dev" }) baseDomain: string;
+  @Column() servDir: string;
+}
+
+enum Role { ADMIN = "admin", USER = "user" }
+enum ServerType { CADDY = "caddy", APACHE = "apache", NGINX = "nginx", STATIC = "static" }
+enum ServiceStatus { RUNNING = "running", STOPPED = "stopped", ERROR = "error", DEPLOYING = "deploying" }
+```
+
+---
+
+### 3. Backend — Core
+
+#### [NEW] [server/src/index.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/index.ts)
+
+Express app entry point: middleware stack, route mounting, Socket.IO setup, graceful shutdown.
+
+#### [NEW] [server/src/config/index.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/config/index.ts)
+
+Centralized config from environment variables:
+- `DATABASE_URL`, `JWT_SECRET`, `GITHUB_CLIENT_ID/SECRET`, `GOOGLE_CLIENT_ID/SECRET`
+- `SERV_DIR` (base directory), `BASE_DOMAIN`, `PORT`
+- `MAX_UPLOAD_SIZE_MB`
+
+#### [NEW] [server/src/middleware/](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/middleware/)
+
+- [auth.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/auth.ts) — JWT verification middleware, role-based guards
+- [errorHandler.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/middleware/errorHandler.ts) — Global error handler with typed errors
+- [upload.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/middleware/upload.ts) — Multer config with dynamic size limits from AppSettings
+- `sandbox.ts` — Sandboxed command execution (see §8)
+
+#### [NEW] [server/src/services/auth.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/auth.service.ts)
+
+- [register(email, username, password)](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/store/authStore.ts#40-51) — bcrypt hash + create user
+- [login(email, password)](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/auth.ts#12-13) — verify + issue JWT (access 15min + refresh 7d)
+- [refreshToken(token)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/auth.service.ts#95-107) — rotate refresh tokens
+- Passport strategies for GitHub OAuth and Google OAuth
+
+---
+
+### 4. Backend — Feature APIs
+
+#### [NEW] [server/src/routes/auth.routes.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/routes/auth.routes.ts)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/register` | Register new user |
+| POST | `/api/auth/login` | Login with email/password |
+| POST | `/api/auth/refresh` | Refresh access token |
+| GET | `/api/auth/github` | Initiate GitHub OAuth |
+| GET | `/api/auth/github/callback` | GitHub OAuth callback |
+| GET | `/api/auth/google` | Initiate Google OAuth |
+| GET | `/api/auth/google/callback` | Google OAuth callback |
+| GET | `/api/auth/me` | Get current user |
+
+#### [NEW] [server/src/routes/projects.routes.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/routes/projects.routes.ts)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/projects` | List user's projects |
+| POST | `/api/projects` | Create project (mkdir, generate config, optionally clone repo) |
+| GET | `/api/projects/:id` | Get project details + status |
+| PUT | `/api/projects/:id` | Update project config |
+| DELETE | `/api/projects/:id` | Stop service, remove config, optionally delete files |
+
+#### [NEW] [server/src/routes/domains.routes.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/routes/domains.routes.ts)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/projects/:id/domains` | List custom domains for project |
+| POST | `/api/projects/:id/domains` | Add custom domain (+ DNS verification instructions) |
+| DELETE | `/api/projects/:id/domains/:domainId` | Remove custom domain |
+| POST | `/api/projects/:id/domains/:domainId/verify` | Verify DNS ownership (CNAME/TXT check) |
+
+#### [NEW] [server/src/routes/files.routes.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/routes/files.routes.ts)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/projects/:id/files` | List files in project directory |
+| GET | `/api/projects/:id/files/download` | Download file (query: `?path=...`) |
+| POST | `/api/projects/:id/files/upload` | Upload file(s) via multipart |
+| DELETE | `/api/projects/:id/files` | Delete file (query: `?path=...`) |
+
+#### [NEW] [server/src/routes/github.routes.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/routes/github.routes.ts)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/projects/:id/github/connect` | Clone repo, set up webhook |
+| POST | `/api/webhooks/github` | Receive GitHub push events → pull & restart |
+| DELETE | `/api/projects/:id/github/disconnect` | Remove webhook, optionally remove files |
+
+#### [NEW] [server/src/routes/services.routes.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/routes/services.routes.ts)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/projects/:id/start` | Start the project's service |
+| POST | `/api/projects/:id/stop` | Stop the project's service |
+| POST | `/api/projects/:id/restart` | Restart the service |
+| GET | `/api/projects/:id/status` | Get live service status |
+| GET | `/api/projects/:id/logs` | Get recent service logs |
+
+---
+
+### 5. Backend — Core Services
+
+#### [NEW] [server/src/services/serverConfig.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/serverConfig.service.ts)
+
+Generates server configuration files based on `ServerType`:
+
+- **Caddy**: Caddyfile block with subdomain → directory/port mapping
+- **Nginx**: Server block with `server_name`, `root`/`proxy_pass`, `location` directives
+- **Apache**: VirtualHost with `ServerName`, `DocumentRoot`/`ProxyPass`
+- **Static**: Caddy/Nginx file-server config pointing at the directory
+
+Each generator also supports custom domains — when a custom domain is added, the config includes both `subdomain.runnable.dev` and the custom domain in the server names.
+
+#### [NEW] [server/src/services/process.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/process.service.ts)
+
+- Spawns and manages child processes for each project's server
+- Tracks PIDs, logs stdout/stderr to rotating log files
+- Provides [start()](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/projects.ts#43-45), [stop()](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/projects.ts#45-46), [restart()](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/projects.ts#46-47), [status()](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/projects.ts#47-48), [getLogs()](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/process.service.ts#101-115)
+- Emits status changes via Socket.IO
+
+#### [NEW] [server/src/services/domain.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/domain.service.ts)
+
+- [addDomain(projectId, domain)](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/projects.ts#57-58) — validate format, create DNS verification instructions
+- [verifyDomain(domainId)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/domain.service.ts#46-88) — check CNAME/TXT record via DNS lookup (`dns.promises.resolve`)
+- `provisionSSL(domain)` — Caddy auto-TLS handles this; just add domain to config and reload
+- [removeDomain(domainId)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/domain.service.ts#89-106) — remove from config, reload Caddy
+
+#### [NEW] [server/src/services/github.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts)
+
+- [cloneRepo(url, targetDir, token?)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts#9-33) — `git clone` with optional auth
+- [pullLatest(dir)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts#34-40) — `git pull origin main`
+- [setupWebhook(repoUrl, token, callbackUrl, secret)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts#41-82) — via GitHub API
+- [removeWebhook(repoUrl, token, webhookId)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts#83-97) — cleanup
+- [verifyWebhookSignature(payload, signature, secret)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts#98-104) — HMAC-SHA256
+
+#### [NEW] [server/src/services/fileManager.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/fileManager.service.ts)
+
+- [listFiles(dir)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/fileManager.service.ts#25-62) — recursive directory listing with metadata
+- [uploadFile(dir, file)](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/fileManager.service.ts#63-72) — save uploaded file with path validation
+- [downloadFile(dir, filePath)](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/projects.ts#63-65) — stream file for download
+- [deleteFile(dir, filePath)](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/api/projects.ts#69-70) — remove file with path traversal protection
+
+---
+
+### 6. Frontend
+
+#### [NEW] Client source structure:
+
+```
+client/src/
+├── main.tsx
+├── App.tsx                    # Router + auth provider
+├── api/                       # API client (axios instance + typed endpoints)
+│   ├── client.ts
+│   ├── auth.ts
+│   ├── projects.ts
+│   ├── files.ts
+│   └── github.ts
+├── store/                     # Zustand stores
+│   ├── authStore.ts
+│   └── projectStore.ts
+├── hooks/
+│   ├── useAuth.ts
+│   └── useSocket.ts
+├── pages/
+│   ├── Login.tsx
+│   ├── Register.tsx
+│   ├── Dashboard.tsx          # Project cards with status badges
+│   ├── ProjectCreate.tsx      # Wizard: name, subdomain, server type, GitHub
+│   ├── ProjectDetail.tsx      # Tabbed view: Overview, Files, GitHub, Logs
+│   └── Settings.tsx
+├── components/
+│   ├── Layout.tsx             # Sidebar + header + content area
+│   ├── ProtectedRoute.tsx
+│   ├── ProjectCard.tsx
+│   ├── StatusBadge.tsx
+│   ├── FileBrowser.tsx        # Tree view + upload/download/delete
+│   ├── LogViewer.tsx          # Real-time log streaming
+│   ├── GitHubConnect.tsx
+│   └── ServerTypeSelector.tsx
+└── styles/
+    └── index.css              # Design system: dark theme, glassmorphism
+```
+
+**Design Direction:**
+- Dark theme with glassmorphism cards
+- Accent color palette: vibrant blue-purple gradients
+- Status indicators with animated pulse for running services
+- Smooth page transitions and micro-animations
+- Inter font from Google Fonts
+- Responsive layout with collapsible sidebar
+
+---
+
+### 7. Sandboxed Environment
+
+All system-level operations (git commands, server processes, file operations) run inside a sandboxed execution layer:
+
+#### [NEW] [server/src/services/sandbox.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/sandbox.service.ts)
+
+**Approach**: Each project runs in an isolated environment using:
+
+1. **Dedicated Unix user per project** — `useradd runnable-<projectId>` with restricted permissions
+2. **chroot or namespace isolation** — project processes can only access their own directory
+3. **Resource limits** — via `ulimit` / cgroups: max CPU, memory, open files, disk quota
+4. **Network restrictions** — projects bind only to their assigned internal port
+5. **Command allowlist** — only permitted commands (`git`, `caddy`, `nginx`, `apache2`) can be executed
+
+```typescript
+class SandboxService {
+  // Execute command in sandboxed context
+  async exec(projectId: string, command: string, args: string[]): Promise<ExecResult>
+  // Create sandbox for new project (user, directory, limits)
+  async createSandbox(projectId: string, directoryPath: string): Promise<void>
+  // Tear down sandbox on project deletion
+  async destroySandbox(projectId: string): Promise<void>
+}
+```
+
+The sandbox wraps all calls in [process.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/process.service.ts), [github.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/github.service.ts), and [fileManager.service.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/fileManager.service.ts).
+
+---
+
+### 8. Infrastructure & Deployment
+
+#### [NEW] [docker-compose.yml](file:///Users/araasryan/AndroidStudioProjects/runnable/docker-compose.yml)
+
+Services:
+- `postgres` — PostgreSQL 16 with persistent volume
+- `runnable-server` — Backend (Node.js)
+- `runnable-client` — Frontend (served by Vite in dev, Nginx in production)
+
+#### [NEW] [.env.example](file:///Users/araasryan/AndroidStudioProjects/runnable/.env.example)
+
+All configurable environment variables with safe defaults.
+
+#### Wildcard Subdomain Strategy
+
+The host machine needs:
+1. Wildcard DNS: `*.runnable.dev → server IP` (configured externally)
+2. A master Caddy instance acts as the entry-point reverse proxy:
+   - `runnable.dev` → Runnable app frontend
+   - `api.runnable.dev` → Runnable API
+   - `*.runnable.dev` → dynamically routed to per-project managed services
+
+Each project gets an allocated port. The master Caddy config is regenerated and hot-reloaded when projects are created/deleted.
+
+**Custom Domain Flow:**
+1. User adds `mysite.com` to their project
+2. App returns DNS instructions: "Add CNAME `mysite.com` → `yourproject.runnable.dev`"
+3. User clicks "Verify" → backend does DNS lookup to confirm CNAME
+4. On verification, Caddy config is updated to include `mysite.com` → Caddy auto-provisions TLS via Let's Encrypt
+
+---
+
+### 9. Configurable Base Domain
+
+The architecture is currently hardcoded to use `runnable.dev` as the domain name in the frontend UI and as a fallback in the backend settings. This will be made globally configurable:
+
+#### [MODIFY] [server/src/config/index.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/config/index.ts)
+Update default fallbacks from `runnable.dev` to use `localhost` if `BASE_DOMAIN` is not provided to better support local development and third-party setups.
+
+#### [MODIFY] [server/src/entities/AppSettings.ts](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/entities/AppSettings.ts)
+Update the `@Column` default value for `baseDomain` from `runnable.dev` to `localhost`.
+
+#### [MODIFY] [client/.env.example](file:///Users/araasryan/AndroidStudioProjects/runnable/client/.env.example)
+Create an example environment file for the Vite frontend specifying `VITE_BASE_DOMAIN=localhost:5175`.
+
+#### [MODIFY] Client UI files:
+Inject `import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'` instead of hardcoding `.runnable.dev` in strings. This will update:
+- [client/src/components/FileBrowser.tsx](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/components/FileBrowser.tsx)
+- [client/src/pages/ProjectDetail.tsx](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/pages/ProjectDetail.tsx)
+- [client/src/pages/Dashboard.tsx](file:///Users/araasryan/AndroidStudioProjects/runnable/client/src/pages/Dashboard.tsx)
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Caddy as the primary reverse proxy**: Even if a user chooses Apache/Nginx for their project, the master reverse proxy (handling `*.runnable.dev` routing + custom domains) will always be Caddy. The user's chosen server type runs on an internal port behind it.
+
+> [!NOTE]
+> **Sandboxed execution**: All system-level operations run through the [SandboxService](file:///Users/araasryan/AndroidStudioProjects/runnable/server/src/services/sandbox.service.ts#17-103) with per-project Unix users, resource limits, and restricted filesystem access (see §7).
+
+> [!IMPORTANT]
+> **OAuth setup required**: GitHub and Google OAuth will need registered OAuth applications. The client IDs and secrets must be configured in [.env](file:///Users/araasryan/AndroidStudioProjects/runnable/.env) before those auth methods work. Local username/password auth will work out of the box.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+
+Since this is a new project, I will write:
+
+1. **Backend unit tests** (Vitest):
+   - Auth service: registration, login, JWT generation/verification
+   - Server config generators: verify Caddy/Nginx/Apache output
+   - File manager: upload/download/delete with path traversal protection
+   - Run with: `cd server && npm test`
+
+2. **Frontend build verification**:
+   - `cd client && npm run build` — verify no TypeScript or build errors
+
+### Browser Verification
+
+Using the browser tool, I will:
+1. Open `http://localhost:5173` and verify the login page renders
+2. Register a new user and confirm redirect to dashboard
+3. Create a new project with STATIC server type
+4. Verify subdomain routing is configured
+5. Upload a file and confirm it appears in the file browser
+
+### Manual Verification (User)
+
+> [!NOTE]
+> These require the full server environment and cannot be verified in dev alone:
+
+1. **GitHub Integration**: Connect a real GitHub repo, push a change, verify auto-deploy
+2. **Subdomain Access**: Visit `your-project.runnable.dev` and verify it serves content
+3. **Process Management**: Start/stop/restart a service and verify status changes
+4. **OAuth**: Test GitHub and Google login flows (requires OAuth app credentials)

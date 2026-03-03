@@ -1,0 +1,71 @@
+import api from './client';
+
+export interface Project {
+    id: string;
+    name: string;
+    subdomain: string;
+    directoryPath: string;
+    serverType: 'caddy' | 'apache' | 'nginx' | 'static';
+    status: 'running' | 'stopped' | 'error' | 'deploying';
+    port?: number;
+    configPath?: string;
+    userId: string;
+    githubRepo?: {
+        id: string;
+        repoUrl: string;
+        branch: string;
+        isPrivate: boolean;
+        lastDeployAt?: string;
+    };
+    customDomains?: {
+        id: string;
+        domain: string;
+        verified: boolean;
+        sslProvisioned: boolean;
+    }[];
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface CreateProjectData {
+    name: string;
+    subdomain: string;
+    serverType: string;
+}
+
+export const projectsApi = {
+    list: () => api.get<Project[]>('/projects'),
+    get: (id: string) => api.get<Project>(`/projects/${id}`),
+    create: (data: CreateProjectData) => api.post<Project>('/projects', data),
+    update: (id: string, data: Partial<CreateProjectData>) => api.put<Project>(`/projects/${id}`, data),
+    delete: (id: string) => api.delete(`/projects/${id}`),
+
+    // Service controls
+    start: (id: string) => api.post(`/projects/${id}/start`),
+    stop: (id: string) => api.post(`/projects/${id}/stop`),
+    restart: (id: string) => api.post(`/projects/${id}/restart`),
+    status: (id: string) => api.get(`/projects/${id}/status`),
+    logs: (id: string, lines?: number) => api.get(`/projects/${id}/logs`, { params: { lines } }),
+
+    // GitHub
+    connectGithub: (id: string, repoUrl: string, branch?: string) =>
+        api.post(`/projects/${id}/github/connect`, { repoUrl, branch }),
+    disconnectGithub: (id: string) => api.delete(`/projects/${id}/github/disconnect`),
+
+    // Custom domains
+    listDomains: (id: string) => api.get(`/projects/${id}/domains`),
+    addDomain: (id: string, domain: string) => api.post(`/projects/${id}/domains`, { domain }),
+    verifyDomain: (id: string, domainId: string) => api.post(`/projects/${id}/domains/${domainId}/verify`),
+    removeDomain: (id: string, domainId: string) => api.delete(`/projects/${id}/domains/${domainId}`),
+
+    // Files
+    listFiles: (id: string, path?: string) => api.get(`/projects/${id}/files`, { params: { path } }),
+    downloadFile: (id: string, path: string) =>
+        api.get(`/projects/${id}/files/download`, { params: { path }, responseType: 'blob' }),
+    uploadFiles: (id: string, formData: FormData) =>
+        api.post(`/projects/${id}/files/upload`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        }),
+    deleteFile: (id: string, path: string) => api.delete(`/projects/${id}/files`, { params: { path } }),
+    createDir: (id: string, path: string) => api.post(`/projects/${id}/files/mkdir`, { path }),
+};
