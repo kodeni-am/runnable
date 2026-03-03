@@ -9,6 +9,11 @@ export interface Project {
     status: 'running' | 'stopped' | 'error' | 'deploying';
     port?: number;
     configPath?: string;
+    containerId?: string;
+    internalPort?: number;
+    buildCommand?: string;
+    startCommand?: string;
+    envVars?: Record<string, string>;
     userId: string;
     githubRepo?: {
         id: string;
@@ -37,7 +42,7 @@ export const projectsApi = {
     list: () => api.get<Project[]>('/projects'),
     get: (id: string) => api.get<Project>(`/projects/${id}`),
     create: (data: CreateProjectData) => api.post<Project>('/projects', data),
-    update: (id: string, data: Partial<CreateProjectData>) => api.put<Project>(`/projects/${id}`, data),
+    update: (id: string, data: Partial<Project>) => api.put<Project>(`/projects/${id}`, data),
     delete: (id: string) => api.delete(`/projects/${id}`),
 
     // Service controls

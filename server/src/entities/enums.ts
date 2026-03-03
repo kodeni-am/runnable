@@ -16,4 +16,5 @@ export enum ServiceStatus {
     STOPPED = 'stopped',
     ERROR = 'error',
     DEPLOYING = 'deploying',
+    BUILDING = 'building',
 }

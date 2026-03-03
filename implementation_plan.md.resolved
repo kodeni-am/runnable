@@ -7,7 +7,7 @@ A web-based application for managing server directories, hosting them via Caddy/
 ```mermaid
 graph TB
     subgraph "Client (React + TypeScript + Vite)"
-        UI[Web UI :5173]
+        UI[Web UI :5175]
     end
 
     subgraph "Server (Node.js + Express + TypeScript)"
@@ -463,7 +463,7 @@ Since this is a new project, I will write:
 ### Browser Verification
 
 Using the browser tool, I will:
-1. Open `http://localhost:5173` and verify the login page renders
+1. Open `http://localhost:5175` and verify the login page renders
 2. Register a new user and confirm redirect to dashboard
 3. Create a new project with STATIC server type
 4. Verify subdomain routing is configured

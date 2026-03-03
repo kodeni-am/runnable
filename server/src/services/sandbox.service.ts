@@ -13,7 +13,7 @@ interface ExecResult {
     exitCode: number;
 }
 
-const ALLOWED_COMMANDS = ['git', 'caddy', 'nginx', 'apache2', 'apachectl', 'systemctl', 'ls', 'mkdir', 'rm', 'cp', 'railpack', 'docker'];
+const ALLOWED_COMMANDS = ['git', 'caddy', 'nginx', 'apache2', 'apachectl', 'systemctl', 'ls', 'mkdir', 'rm', 'cp', 'railpack', 'docker', 'sh', 'npm', 'npx'];
 
 export class SandboxService {
     static async exec(projectId: string, command: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): Promise<ExecResult> {
@@ -23,32 +23,44 @@ export class SandboxService {
             throw new Error(`Command not allowed: ${baseCommand}`);
         }
 
-        // Sanitize args - no shell injection
-        const sanitizedArgs = args.map(arg => arg.replace(/[;&|`$]/g, ''));
+        return new Promise((resolve) => {
+            const processEnv = { ...process.env, ...env };
+            let child: ChildProcess;
 
-        try {
             if (config.sandbox.enabled) {
-                // Run as sandboxed user
                 const sandboxUser = `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`;
-                const { stdout, stderr } = await execAsync(
-                    `sudo -n -u ${sandboxUser} ${command} ${sanitizedArgs.join(' ')}`,
-                    { cwd, timeout: 600000, maxBuffer: 50 * 1024 * 1024, env: { ...process.env, ...env } }
-                );
-                return { stdout, stderr, exitCode: 0 };
+                child = spawn('sudo', ['-n', '-u', sandboxUser, command, ...args], { cwd, env: processEnv });
             } else {
-                const { stdout, stderr } = await execAsync(
-                    `${command} ${sanitizedArgs.join(' ')}`,
-                    { cwd, timeout: 600000, maxBuffer: 50 * 1024 * 1024, env: { ...process.env, ...env } }
-                );
-                return { stdout, stderr, exitCode: 0 };
+                child = spawn(command, args, { cwd, env: processEnv });
             }
-        } catch (error: any) {
-            return {
-                stdout: error.stdout || '',
-                stderr: error.stderr || error.message,
-                exitCode: error.code || 1,
-            };
-        }
+
+            let stdout = '';
+            let stderr = '';
+
+            child.stdout?.on('data', (data) => {
+                stdout += data.toString();
+            });
+
+            child.stderr?.on('data', (data) => {
+                stderr += data.toString();
+            });
+
+            child.on('close', (exitCode) => {
+                resolve({
+                    stdout,
+                    stderr,
+                    exitCode: exitCode || 0
+                });
+            });
+
+            child.on('error', (error: any) => {
+                resolve({
+                    stdout,
+                    stderr: error.message,
+                    exitCode: error.code || 1
+                });
+            });
+        });
     }
 
     static async spawn(projectId: string, command: string, args: string[], logPath: string, cwd?: string, env?: NodeJS.ProcessEnv): Promise<number> {
@@ -57,13 +69,13 @@ export class SandboxService {
             throw new Error(`Command not allowed: ${baseCommand}`);
         }
 
-        const sanitizedArgs = args.map(arg => arg.replace(/[;&|`$]/g, ''));
         const logStream = fsSync.createWriteStream(logPath, { flags: 'a' });
 
         return new Promise((resolve, reject) => {
+            const processEnv = { ...process.env, ...env };
             const child = config.sandbox.enabled
-                ? spawn('sudo', ['-n', '-u', `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`, command, ...sanitizedArgs], { cwd, env: { ...process.env, ...env } })
-                : spawn(command, sanitizedArgs, { cwd, env: { ...process.env, ...env } });
+                ? spawn('sudo', ['-n', '-u', `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`, command, ...args], { cwd, env: processEnv })
+                : spawn(command, args, { cwd, env: processEnv });
 
             child.stdout?.on('data', (data) => logStream.write(data));
             child.stderr?.on('data', (data) => logStream.write(data));

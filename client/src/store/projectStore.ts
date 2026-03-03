@@ -8,7 +8,7 @@ interface ProjectState {
     isLoading: boolean;
     error: string | null;
     fetchProjects: () => Promise<void>;
-    fetchProject: (id: string) => Promise<void>;
+    fetchProject: (id: string) => Promise<Project | void>;
     createProject: (name: string, subdomain: string, serverType: string) => Promise<Project>;
     deleteProject: (id: string) => Promise<void>;
     updateProjectStatus: (id: string, status: Project['status']) => void;
@@ -35,6 +35,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
         try {
             const { data } = await projectsApi.get(id);
             set({ currentProject: data, isLoading: false });
+            return data;
         } catch (error: any) {
             set({ error: error.response?.data?.error || 'Failed to fetch project', isLoading: false });
         }

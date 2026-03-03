@@ -6,6 +6,7 @@ import { AppDataSource } from '../config/data-source';
 import { Project, ServiceStatus, ServerType } from '../entities';
 import { SandboxService } from './sandbox.service';
 import { ServerConfigService } from './serverConfig.service';
+import { DetectService } from './detect.service';
 
 interface ManagedProcess {
     process: ChildProcess;
@@ -44,6 +45,11 @@ export class ProcessService {
         // If the project is an APP, we build and run via Docker + Railpack
         if (project.serverType === ServerType.APP) {
             try {
+                // Set BUILDING status immediately
+                project.status = ServiceStatus.BUILDING;
+                await projectRepo.save(project);
+                ProcessService.emitStatus(projectId, ServiceStatus.BUILDING);
+
                 const imageName = `runnable-img-${projectId.substring(0, 8)}`;
                 const containerName = `runnable-${projectId.substring(0, 8)}`;
                 const storageDir = path.resolve(config.hosting.servDir, '..');
@@ -62,6 +68,20 @@ export class ProcessService {
 
                 // Clear previous build logs
                 await fs.writeFile(buildLogPath, `Building project ${project.name} (${projectId})...\n`);
+
+                // Auto-detect project type if no custom commands set
+                const detection = await DetectService.detect(project.directoryPath);
+                await fs.appendFile(buildLogPath, `Detected runtime: ${detection.runtime}\n`);
+                if (detection.buildCommand) {
+                    await fs.appendFile(buildLogPath, `Auto-detected build command: ${detection.buildCommand}\n`);
+                }
+                if (detection.startCommand) {
+                    await fs.appendFile(buildLogPath, `Auto-detected start command: ${detection.startCommand}\n`);
+                }
+
+                // Use user-provided commands, falling back to auto-detected defaults
+                const effectiveBuildCommand = project.buildCommand || detection.buildCommand;
+                const effectiveStartCommand = project.startCommand || detection.startCommand;
 
                 // Ensure BuildKit is running (required for railpack)
                 const buildkitCheck = await SandboxService.exec(projectId, 'docker', ['ps', '-a', '--filter', 'name=runnable-buildkit', '--format', '{{.Status}}']);
@@ -82,6 +102,15 @@ export class ProcessService {
                     BUILDKIT_HOST: 'docker-container://runnable-buildkit'
                 };
 
+                // 0. Run build command (user-provided or auto-detected)
+                const userEnv = typeof project.envVars === 'string' ? JSON.parse(project.envVars) : (project.envVars || {});
+                if (effectiveBuildCommand) {
+                    await fs.appendFile(buildLogPath, `\n--- Build Command: ${effectiveBuildCommand} ---\n`);
+                    const buildEnv = { ...buildkitEnv, ...userEnv };
+                    const buildResult = await SandboxService.exec(projectId, 'sh', ['-c', effectiveBuildCommand], project.directoryPath, buildEnv);
+                    await logAndCheck(buildResult, 'Build');
+                }
+
                 // 1. Build image using railpack (Streaming)
                 await fs.appendFile(buildLogPath, "\n--- Railpack Build (Streaming) ---\n");
                 const buildExitCode = await SandboxService.spawn(projectId, 'railpack', ['build', '.', '--name', imageName], buildLogPath, project.directoryPath, buildkitEnv);
@@ -95,14 +124,34 @@ export class ProcessService {
 
                 // 3. Run container and map internal port to random host port
                 const internalPort = project.port || 8080;
-                const runResult = await SandboxService.exec(projectId, 'docker', [
+                const runArgs = [
                     'run', '-d',
                     '--name', containerName,
                     '-p', `0:${internalPort}`, // Dynamic host port mapping
                     '-e', `PORT=${internalPort}`,
                     '--restart', 'unless-stopped',
-                    imageName
-                ]);
+                ];
+
+                // Inject user-defined environment variables
+                Object.entries(userEnv).forEach(([key, value]) => {
+                    runArgs.push('-e', `${key}=${value}`);
+                });
+
+                runArgs.push(imageName);
+
+                // Only override the container start command if the user explicitly set one.
+                // Railpack auto-detects the start command (e.g. from package.json scripts.start)
+                // and bakes it into the image — we should NOT override that with our
+                // auto-detected default since Railpack runs inside the correct environment.
+                if (project.startCommand) {
+                    // Railpack sets entrypoint to ["/bin/bash", "-c"], so we must use
+                    // --entrypoint to override it and pass the command as CMD args.
+                    const imageIdx = runArgs.indexOf(imageName);
+                    runArgs.splice(imageIdx, 0, '--entrypoint', 'sh');
+                    runArgs.push('-c', project.startCommand);
+                }
+
+                const runResult = await SandboxService.exec(projectId, 'docker', runArgs);
                 await logAndCheck(runResult, 'Docker Run');
 
                 // 4. Inspect the dynamic host port

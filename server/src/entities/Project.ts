@@ -45,6 +45,15 @@ export class Project {
     @Column({ nullable: true })
     internalPort?: number;
 
+    @Column({ nullable: true })
+    buildCommand?: string;
+
+    @Column({ nullable: true })
+    startCommand?: string;
+
+    @Column({ type: 'simple-json', nullable: true })
+    envVars?: Record<string, string>;
+
     @ManyToOne(() => User, (user) => user.projects, { onDelete: 'CASCADE' })
     user: User;
 

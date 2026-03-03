@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
-import { projectsApi } from '../api/projects';
+import { projectsApi, type Project } from '../api/projects';
 import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
 import FileBrowser from '../components/FileBrowser';
@@ -15,7 +15,7 @@ export default function ProjectDetail() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
     const { currentProject, fetchProject, deleteProject } = useProjectStore();
-    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs'>('overview');
+    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs' | 'settings'>('overview');
     const [actionLoading, setActionLoading] = useState('');
 
     // GitHub connect state
@@ -33,8 +33,25 @@ export default function ProjectDetail() {
     // Delete state
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+    // Settings state
+    const [buildCommand, setBuildCommand] = useState('');
+    const [startCommand, setStartCommand] = useState('');
+    const [envVars, setEnvVars] = useState<{ key: string, value: string }[]>([]);
+    const [saveLoading, setSaveLoading] = useState(false);
+    const [saveSuccess, setSaveSuccess] = useState(false);
+
     useEffect(() => {
-        if (id) fetchProject(id);
+        if (id) {
+            fetchProject(id).then((res) => {
+                const p = res as Project;
+                if (p) {
+                    setBuildCommand(p.buildCommand || '');
+                    setStartCommand(p.startCommand || '');
+                    const envs = Object.entries(p.envVars || {}).map(([key, value]) => ({ key, value: String(value) }));
+                    setEnvVars(envs.length > 0 ? envs : [{ key: '', value: '' }]);
+                }
+            });
+        }
     }, [id]);
 
     useEffect(() => {
@@ -122,6 +139,38 @@ export default function ProjectDetail() {
         } catch { }
     };
 
+    const handleSaveSettings = async () => {
+        if (!id) return;
+        setSaveLoading(true);
+        setSaveSuccess(false);
+        try {
+            const envObj = envVars.reduce((acc, { key, value }) => {
+                if (key.trim()) acc[key.trim()] = value;
+                return acc;
+            }, {} as Record<string, string>);
+
+            await projectsApi.update(id, {
+                buildCommand,
+                startCommand,
+                envVars: envObj
+            });
+            await fetchProject(id);
+            setSaveSuccess(true);
+            setTimeout(() => setSaveSuccess(false), 3000);
+        } catch (err) {
+            alert('Failed to save settings');
+        }
+        setSaveLoading(false);
+    };
+
+    const addEnvVar = () => setEnvVars([...envVars, { key: '', value: '' }]);
+    const removeEnvVar = (index: number) => setEnvVars(envVars.filter((_, i) => i !== index));
+    const updateEnvVar = (index: number, field: 'key' | 'value', value: string) => {
+        const newEnvs = [...envVars];
+        newEnvs[index][field] = value;
+        setEnvVars(newEnvs);
+    };
+
     if (!currentProject) {
         return (
             <Layout>
@@ -169,7 +218,7 @@ export default function ProjectDetail() {
 
             <div className="page-content">
                 <div className="tabs">
-                    {(['overview', 'files', 'github', 'domains', 'logs'] as const).map((t) => (
+                    {(['overview', 'files', 'github', 'domains', 'logs', 'settings'] as const).map((t) => (
                         <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
                             {t.charAt(0).toUpperCase() + t.slice(1)}
                         </button>
@@ -345,6 +394,84 @@ export default function ProjectDetail() {
 
                 {/* LOGS TAB */}
                 {tab === 'logs' && <LogViewer projectId={p.id} />}
+
+                {/* SETTINGS TAB */}
+                {tab === 'settings' && (
+                    <div className="settings-section glass">
+                        <div style={{ maxWidth: 700 }}>
+                            <h3 style={{ marginBottom: 20 }}>Project Configuration</h3>
+
+                            <div className="form-group">
+                                <label>Build Command</label>
+                                <input
+                                    className="form-input"
+                                    placeholder="e.g. npm run build && npx tsc"
+                                    value={buildCommand}
+                                    onChange={(e) => setBuildCommand(e.target.value)}
+                                />
+                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                    Executed in the project root before Railpack packaging.
+                                </p>
+                            </div>
+
+                            <div className="form-group">
+                                <label>Start Command Override</label>
+                                <input
+                                    className="form-input"
+                                    placeholder="e.g. npx tsx server/index.ts"
+                                    value={startCommand}
+                                    onChange={(e) => setStartCommand(e.target.value)}
+                                />
+                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                    Override the default container start behavior.
+                                </p>
+                            </div>
+
+                            <div className="form-group">
+                                <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    Environment Variables
+                                    <button className="btn btn-secondary" onClick={addEnvVar} style={{ padding: '4px 8px', fontSize: 12 }}>
+                                        <Plus size={14} /> Add Variable
+                                    </button>
+                                </label>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                                    {envVars.map((env, index) => (
+                                        <div key={index} style={{ display: 'flex', gap: 8 }}>
+                                            <input
+                                                className="form-input"
+                                                style={{ flex: 1 }}
+                                                placeholder="KEY"
+                                                value={env.key}
+                                                onChange={(e) => updateEnvVar(index, 'key', e.target.value)}
+                                            />
+                                            <input
+                                                className="form-input"
+                                                style={{ flex: 1 }}
+                                                placeholder="VALUE"
+                                                value={env.value}
+                                                onChange={(e) => updateEnvVar(index, 'value', e.target.value)}
+                                            />
+                                            <button className="btn btn-danger" onClick={() => removeEnvVar(index)} style={{ padding: 8 }}>
+                                                <XCircle size={16} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div style={{ marginTop: 30, display: 'flex', alignItems: 'center', gap: 16 }}>
+                                <button className="btn btn-primary" onClick={handleSaveSettings} disabled={saveLoading}>
+                                    {saveLoading ? <span className="spinner" /> : 'Save Settings'}
+                                </button>
+                                {saveSuccess && (
+                                    <span style={{ color: 'var(--status-running)', display: 'flex', alignItems: 'center', gap: 4, fontSize: 14 }}>
+                                        <CheckCircle2 size={16} /> Saved Successfully
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* DELETE CONFIRMATION MODAL */}

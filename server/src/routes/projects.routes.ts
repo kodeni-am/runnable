@@ -119,9 +119,13 @@ router.put('/:id', async (req: AuthRequest, res: Response, next: NextFunction) =
             throw new AppError('Project not found', 404);
         }
 
-        const { name, serverType } = req.body;
+        const { name, serverType, buildCommand, startCommand, envVars, port } = req.body;
         if (name) project.name = name;
         if (serverType) project.serverType = serverType as ServerType;
+        if (buildCommand !== undefined) project.buildCommand = buildCommand;
+        if (startCommand !== undefined) project.startCommand = startCommand;
+        if (envVars !== undefined) project.envVars = envVars;
+        if (port !== undefined) project.port = port;
 
         await projectRepo.save(project);
         res.json(project);

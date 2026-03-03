@@ -1033,3 +1033,15 @@ body {
     margin: 20px;
   }
 }
+/* ============ SETTINGS SECTION ============ */
+.settings-section {
+  padding: 32px;
+  border-radius: var(--radius-lg);
+  margin-top: 16px;
+}
+
+.settings-section h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 24px;
+}
