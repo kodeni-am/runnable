@@ -49,6 +49,7 @@ export const projectsApi = {
     start: (id: string) => api.post(`/projects/${id}/start`),
     stop: (id: string) => api.post(`/projects/${id}/stop`),
     restart: (id: string) => api.post(`/projects/${id}/restart`),
+    reloadProxy: (id: string) => api.post(`/projects/${id}/reload-proxy`),
     status: (id: string) => api.get(`/projects/${id}/status`),
     logs: (id: string, lines?: number) => api.get(`/projects/${id}/logs`, { params: { lines } }),
 

@@ -227,6 +227,45 @@ router.get('/:id/status', async (req: AuthRequest, res: Response, next: NextFunc
     }
 });
 
+router.post('/:id/reload-proxy', async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const project = await projectRepo.findOne({
+            where: { id: req.params.id as string, userId: req.user!.id },
+            relations: ['customDomains'],
+        });
+        if (!project) throw new AppError('Project not found', 404);
+
+        // Generate and write new config
+        const configContent = await ServerConfigService.generateConfig({
+            subdomain: project.subdomain,
+            directoryPath: project.directoryPath,
+            port: project.port || 80,
+            serverType: project.serverType,
+            customDomains: project.customDomains?.map(cd => cd.domain) || [],
+        });
+
+        const configPath = await ServerConfigService.writeConfig(
+            project.subdomain,
+            configContent,
+            project.serverType
+        );
+
+        // Save updated config path if changed
+        if (project.configPath !== configPath) {
+            project.configPath = configPath;
+            await projectRepo.save(project);
+        }
+
+        // Reload the server
+        await ServerConfigService.reloadCaddy();
+
+        res.json({ message: 'Proxy configuration reloaded successfully' });
+    } catch (error) {
+        next(error);
+    }
+});
+
 router.get('/:id/logs', async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const lines = parseInt(req.query.lines as string) || 100;

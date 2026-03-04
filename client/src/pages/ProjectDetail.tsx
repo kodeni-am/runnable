@@ -469,6 +469,26 @@ export default function ProjectDetail() {
                                     </span>
                                 )}
                             </div>
+
+                            <div style={{ marginTop: 40, paddingTop: 30, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                                <h3 style={{ marginBottom: 10 }}>Advanced Server Controls</h3>
+                                <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+                                    If your project is not accessible via its subdomain, you can force the system to regenerate its proxy configuration.
+                                </p>
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={async () => {
+                                        try {
+                                            await projectsApi.reloadProxy(p.id);
+                                            alert('Proxy configuration regenerated and Caddy reloaded successfully.');
+                                        } catch (err: any) {
+                                            alert(err.response?.data?.error || 'Failed to reload proxy configuration.');
+                                        }
+                                    }}
+                                >
+                                    <Globe size={16} /> Regenerate Proxy Config
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}
