@@ -143,13 +143,11 @@ ${aliases}
 
     static async reloadCaddy(): Promise<void> {
         try {
-            const response = await fetch(`${config.caddy.adminApi}/load`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-            });
-            if (!response.ok) {
-                console.error('Failed to reload Caddy:', await response.text());
-            }
+            const { execFile } = await import('child_process');
+            const { promisify } = await import('util');
+            const execFileAsync = promisify(execFile);
+            await execFileAsync('caddy', ['reload', '--config', '/etc/caddy/Caddyfile']);
+            console.log('✅ Caddy reloaded');
         } catch (error) {
             console.error('Failed to reload Caddy:', error);
         }
