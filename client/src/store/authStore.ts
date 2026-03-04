@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { authApi } from '../api/auth';
 
+export interface UserPermissions {
+    maxProjects: number | null;
+    canCreateProjects: boolean;
+    canUseCustomDomains: boolean;
+    allowedServerTypes: string[] | null;
+}
+
 interface User {
     id: string;
     email: string;
@@ -9,6 +16,7 @@ interface User {
     isApproved: boolean;
     githubId?: string | null;
     googleId?: string | null;
+    permissions?: UserPermissions;
 }
 
 interface AuthState {

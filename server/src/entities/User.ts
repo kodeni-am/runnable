@@ -8,6 +8,21 @@ import {
 } from 'typeorm';
 import { Role } from './enums';
 import { Project } from './Project';
+import { ProjectCollaborator } from './ProjectCollaborator';
+
+export interface UserPermissions {
+    maxProjects: number | null;
+    canCreateProjects: boolean;
+    canUseCustomDomains: boolean;
+    allowedServerTypes: string[] | null;
+}
+
+export const DEFAULT_USER_PERMISSIONS: UserPermissions = {
+    maxProjects: null,
+    canCreateProjects: true,
+    canUseCustomDomains: true,
+    allowedServerTypes: null,
+};
 
 @Entity('users')
 export class User {
@@ -38,8 +53,14 @@ export class User {
     @Column({ nullable: true })
     githubToken?: string;
 
+    @Column({ type: 'simple-json', nullable: true })
+    permissions?: UserPermissions;
+
     @OneToMany(() => Project, (project) => project.user)
     projects: Project[];
+
+    @OneToMany(() => ProjectCollaborator, (collab) => collab.user)
+    collaborations: ProjectCollaborator[];
 
     @CreateDateColumn()
     createdAt: Date;

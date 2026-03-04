@@ -1,5 +1,23 @@
 import api from './client';
 
+export interface ProjectPermissions {
+    canStart: boolean;
+    canEditConfig: boolean;
+    canEditDomains: boolean;
+    canEditFiles: boolean;
+    canDelete: boolean;
+    canViewLogs: boolean;
+}
+
+export interface Collaborator {
+    id: string;
+    userId: string;
+    username: string;
+    email: string;
+    permissions: ProjectPermissions;
+    createdAt: string;
+}
+
 export interface Project {
     id: string;
     name: string;
@@ -31,6 +49,8 @@ export interface Project {
     }[];
     createdAt: string;
     updatedAt: string;
+    _isCollaborator?: boolean;
+    _permissions?: ProjectPermissions;
 }
 
 export interface CreateProjectData {
@@ -81,4 +101,13 @@ export const projectsApi = {
     readFile: (id: string, path: string) => api.get<{ content: string; size: number }>(`/projects/${id}/files/read`, { params: { path } }),
     writeFile: (id: string, path: string, content: string) => api.put(`/projects/${id}/files/write`, { path, content }),
     createFile: (id: string, path: string, content?: string) => api.post(`/projects/${id}/files/create`, { path, content }),
+
+    // Collaborators
+    listCollaborators: (id: string) => api.get<Collaborator[]>(`/projects/${id}/collaborators`),
+    addCollaborator: (id: string, emailOrUsername: string, permissions?: Partial<ProjectPermissions>) =>
+        api.post<Collaborator>(`/projects/${id}/collaborators`, { emailOrUsername, permissions }),
+    updateCollaborator: (id: string, userId: string, permissions: ProjectPermissions) =>
+        api.put<Collaborator>(`/projects/${id}/collaborators/${userId}`, { permissions }),
+    removeCollaborator: (id: string, userId: string) =>
+        api.delete(`/projects/${id}/collaborators/${userId}`),
 };

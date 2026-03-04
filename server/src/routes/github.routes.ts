@@ -1,25 +1,33 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AppDataSource } from '../config/data-source';
 import { Project, GithubRepo, User } from '../entities';
-import { authenticate, requireApproval, AuthRequest } from '../middleware/auth';
+import { ProjectPermission } from '../entities/enums';
+import { authenticate, requireApproval, requireProjectAccess, AuthRequest } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { GithubService } from '../services/github.service';
 import { config } from '../config';
 
 const router = Router();
 
+// All project-scoped routes require auth + approval
+router.use(authenticate, requireApproval);
+
 // Connect GitHub repo to project
-router.post('/:id/github/connect', authenticate, requireApproval, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/:id/github/connect', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const { repoUrl, branch } = req.body;
         if (!repoUrl) throw new AppError('repoUrl is required', 400);
 
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-            relations: ['githubRepo'],
-        });
-        if (!project) throw new AppError('Project not found', 404);
+        const project = (req as any).project as Project;
+        // Load githubRepo relation if not already loaded
+        if (!project.githubRepo) {
+            const projectRepo = AppDataSource.getRepository(Project);
+            const loaded = await projectRepo.findOne({
+                where: { id: project.id },
+                relations: ['githubRepo'],
+            });
+            if (loaded?.githubRepo) project.githubRepo = loaded.githubRepo;
+        }
 
         if (project.githubRepo) {
             throw new AppError('Project already has a GitHub repo connected', 409);
@@ -75,14 +83,18 @@ router.post('/:id/github/connect', authenticate, requireApproval, async (req: Au
 });
 
 // Disconnect GitHub repo
-router.delete('/:id/github/disconnect', authenticate, requireApproval, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.delete('/:id/github/disconnect', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-            relations: ['githubRepo'],
-        });
-        if (!project) throw new AppError('Project not found', 404);
+        const project = (req as any).project as Project;
+        // Load githubRepo relation if not already loaded
+        if (!project.githubRepo) {
+            const projectRepo = AppDataSource.getRepository(Project);
+            const loaded = await projectRepo.findOne({
+                where: { id: project.id },
+                relations: ['githubRepo'],
+            });
+            if (loaded?.githubRepo) project.githubRepo = loaded.githubRepo;
+        }
         if (!project.githubRepo) throw new AppError('No GitHub repo connected', 404);
 
         // Remove webhook

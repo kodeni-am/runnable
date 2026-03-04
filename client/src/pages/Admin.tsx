@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { adminApi } from '../api/admin';
-import type { UserDTO } from '../api/admin';
-import { ShieldAlert, Trash2, CheckCircle, ShieldCheck } from 'lucide-react';
+import type { UserDTO, UserPermissions } from '../api/admin';
+import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
+
+const DEFAULT_PERMISSIONS: UserPermissions = {
+    maxProjects: null,
+    canCreateProjects: true,
+    canUseCustomDomains: true,
+    allowedServerTypes: null,
+};
 
 export default function Admin() {
     usePageTitle('Admin');
@@ -12,6 +19,12 @@ export default function Admin() {
     const [users, setUsers] = useState<UserDTO[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+
+    // Permissions modal state
+    const [permUser, setPermUser] = useState<UserDTO | null>(null);
+    const [permForm, setPermForm] = useState<UserPermissions>(DEFAULT_PERMISSIONS);
+    const [permSaving, setPermSaving] = useState(false);
+    const [allowedTypesStr, setAllowedTypesStr] = useState('');
 
     useEffect(() => {
         fetchUsers();
@@ -48,6 +61,32 @@ export default function Admin() {
         } catch (err: any) {
             alert(err.response?.data?.error || 'Failed to delete user');
         }
+    };
+
+    const handleOpenPerms = (user: UserDTO) => {
+        const perms = user.permissions ?? DEFAULT_PERMISSIONS;
+        setPermUser(user);
+        setPermForm({ ...perms });
+        setAllowedTypesStr(perms.allowedServerTypes ? perms.allowedServerTypes.join(', ') : '');
+    };
+
+    const handleSavePerms = async () => {
+        if (!permUser) return;
+        setPermSaving(true);
+        try {
+            const permsToSave: UserPermissions = {
+                ...permForm,
+                allowedServerTypes: allowedTypesStr.trim()
+                    ? allowedTypesStr.split(',').map(s => s.trim()).filter(Boolean)
+                    : null,
+            };
+            await adminApi.updateUserPermissions(permUser.id, permsToSave);
+            setUsers(users.map(u => u.id === permUser.id ? { ...u, permissions: permsToSave } : u));
+            setPermUser(null);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Failed to update permissions');
+        }
+        setPermSaving(false);
     };
 
     return (
@@ -127,6 +166,15 @@ export default function Admin() {
                                                             <ShieldCheck size={14} /> Approve
                                                         </button>
                                                     )}
+                                                    {user.role !== 'admin' && (
+                                                        <button
+                                                            onClick={() => handleOpenPerms(user)}
+                                                            className="btn btn-secondary"
+                                                            style={{ padding: '6px 14px', fontSize: 13, gap: 6 }}
+                                                        >
+                                                            <Settings size={14} /> Permissions
+                                                        </button>
+                                                    )}
                                                     {user.id !== currentUser?.id && user.role !== 'admin' && (
                                                         <button
                                                             onClick={() => handleDelete(user.id)}
@@ -153,6 +201,72 @@ export default function Admin() {
                     )}
                 </div>
             </div>
+
+            {/* Permissions Modal */}
+            {permUser && (
+                <div className="modal-overlay" onClick={() => setPermUser(null)}>
+                    <div className="modal glass" onClick={(e) => e.stopPropagation()}>
+                        <h2>Permissions for {permUser.username}</h2>
+
+                        <div className="form-group" style={{ marginTop: 16 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={permForm.canCreateProjects}
+                                    onChange={(e) => setPermForm({ ...permForm, canCreateProjects: e.target.checked })}
+                                />
+                                Can Create Projects
+                            </label>
+                        </div>
+
+                        <div className="form-group">
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={permForm.canUseCustomDomains}
+                                    onChange={(e) => setPermForm({ ...permForm, canUseCustomDomains: e.target.checked })}
+                                />
+                                Can Use Custom Domains
+                            </label>
+                        </div>
+
+                        <div className="form-group">
+                            <label>Max Projects (leave empty for unlimited)</label>
+                            <input
+                                className="form-input"
+                                type="number"
+                                min="0"
+                                placeholder="Unlimited"
+                                value={permForm.maxProjects ?? ''}
+                                onChange={(e) => setPermForm({
+                                    ...permForm,
+                                    maxProjects: e.target.value === '' ? null : parseInt(e.target.value),
+                                })}
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>Allowed Server Types (comma-separated, empty for all)</label>
+                            <input
+                                className="form-input"
+                                placeholder="e.g. static, app, caddy"
+                                value={allowedTypesStr}
+                                onChange={(e) => setAllowedTypesStr(e.target.value)}
+                            />
+                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                Available: static, app, caddy, nginx, apache
+                            </p>
+                        </div>
+
+                        <div className="modal-actions">
+                            <button className="btn btn-secondary" onClick={() => setPermUser(null)}>Cancel</button>
+                            <button className="btn btn-primary" onClick={handleSavePerms} disabled={permSaving}>
+                                {permSaving ? <span className="spinner" /> : 'Save Permissions'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </Layout>
     );
 }

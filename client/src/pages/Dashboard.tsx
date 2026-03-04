@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
-import { Plus, Server, FolderGit2, Globe } from 'lucide-react';
+import { Plus, Server, FolderGit2, Globe, Users } from 'lucide-react';
 import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -78,7 +78,23 @@ export default function Dashboard() {
                             >
                                 <div className="project-card-header">
                                     <div>
-                                        <div className="project-name">{project.name}</div>
+                                        <div className="project-name" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            {project.name}
+                                            {(project as any)._isCollaborator && (
+                                                <span style={{
+                                                    padding: '2px 8px',
+                                                    borderRadius: 12,
+                                                    fontSize: 11,
+                                                    background: 'rgba(100, 180, 255, 0.15)',
+                                                    color: '#64b4ff',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: 4,
+                                                }}>
+                                                    <Users size={10} /> Shared
+                                                </span>
+                                            )}
+                                        </div>
                                         <div className="project-subdomain">
                                             <Globe size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
                                             {project.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}

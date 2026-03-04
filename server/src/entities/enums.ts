@@ -18,3 +18,12 @@ export enum ServiceStatus {
     DEPLOYING = 'deploying',
     BUILDING = 'building',
 }
+
+export enum ProjectPermission {
+    CAN_START = 'canStart',
+    CAN_EDIT_CONFIG = 'canEditConfig',
+    CAN_EDIT_DOMAINS = 'canEditDomains',
+    CAN_EDIT_FILES = 'canEditFiles',
+    CAN_DELETE = 'canDelete',
+    CAN_VIEW_LOGS = 'canViewLogs',
+}

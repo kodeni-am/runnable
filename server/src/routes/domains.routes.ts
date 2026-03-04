@@ -1,7 +1,8 @@
 import { Router, Response, NextFunction } from 'express';
 import { AppDataSource } from '../config/data-source';
 import { Project, CustomDomain } from '../entities';
-import { authenticate, requireApproval, AuthRequest } from '../middleware/auth';
+import { ProjectPermission } from '../entities/enums';
+import { authenticate, requireApproval, requireProjectAccess, AuthRequest } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { DomainService } from '../services/domain.service';
 
@@ -11,14 +12,9 @@ const router = Router();
 router.use(authenticate, requireApproval);
 
 // List custom domains for a project
-router.get('/:id/domains', async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.get('/:id/domains', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const domainRepo = AppDataSource.getRepository(CustomDomain);
         const domains = await domainRepo.find({ where: { projectId: project.id } });
         res.json(domains);
@@ -28,13 +24,9 @@ router.get('/:id/domains', async (req: AuthRequest, res: Response, next: NextFun
 });
 
 // Add custom domain
-router.post('/:id/domains', async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/:id/domains', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMAINS), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
+        const project = (req as any).project as Project;
 
         const { domain, redirectTarget } = req.body;
         if (!domain) throw new AppError('Domain is required', 400);
@@ -54,15 +46,8 @@ router.post('/:id/domains', async (req: AuthRequest, res: Response, next: NextFu
 });
 
 // Update redirect target
-router.put('/:id/domains/:domainId/redirect', async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.put('/:id/domains/:domainId/redirect', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMAINS), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        // Verify project ownership FIRST before letting them touch the domain
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
         const { redirectTarget } = req.body;
 
         // Setting it to null/empty string clears the redirect
@@ -77,7 +62,7 @@ router.put('/:id/domains/:domainId/redirect', async (req: AuthRequest, res: Resp
 });
 
 // Verify domain DNS
-router.post('/:id/domains/:domainId/verify', async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/:id/domains/:domainId/verify', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMAINS), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const verified = await DomainService.verifyDomain(req.params.domainId as string);
         res.json({ verified });
@@ -87,7 +72,7 @@ router.post('/:id/domains/:domainId/verify', async (req: AuthRequest, res: Respo
 });
 
 // Remove custom domain
-router.delete('/:id/domains/:domainId', async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.delete('/:id/domains/:domainId', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMAINS), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         await DomainService.removeDomain(req.params.domainId as string);
         res.json({ message: 'Domain removed' });

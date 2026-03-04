@@ -2,7 +2,8 @@ import { Router, Response, NextFunction } from 'express';
 import path from 'path';
 import { AppDataSource } from '../config/data-source';
 import { Project } from '../entities';
-import { authenticate, requireApproval, AuthRequest } from '../middleware/auth';
+import { ProjectPermission } from '../entities/enums';
+import { authenticate, requireApproval, requireProjectAccess, AuthRequest } from '../middleware/auth';
 import { upload } from '../middleware/upload';
 import { AppError } from '../middleware/errorHandler';
 import { FileManagerService } from '../services/fileManager.service';
@@ -12,15 +13,10 @@ const router = Router();
 // All internal routes require authentication and admin approval
 router.use(authenticate, requireApproval);
 
-// List files
-router.get('/:id/files', async (req: AuthRequest, res: Response, next: NextFunction) => {
+// List files (any collaborator can view)
+router.get('/:id/files', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const relativePath = (req.query.path as string) || '';
         const files = await FileManagerService.listFiles(project.directoryPath, relativePath);
         res.json(files);
@@ -29,15 +25,10 @@ router.get('/:id/files', async (req: AuthRequest, res: Response, next: NextFunct
     }
 });
 
-// Download file
-router.get('/:id/files/download', async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Download file (any collaborator can view)
+router.get('/:id/files/download', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const filePath = req.query.path as string;
         if (!filePath) throw new AppError('File path is required', 400);
 
@@ -48,15 +39,10 @@ router.get('/:id/files/download', async (req: AuthRequest, res: Response, next: 
     }
 });
 
-// Upload file(s)
-router.post('/:id/files/upload', upload.array('files', 20), async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Upload file(s) (requires canEditFiles)
+router.post('/:id/files/upload', requireProjectAccess(ProjectPermission.CAN_EDIT_FILES), upload.array('files', 20), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const targetDir = (req.body.path as string) || '';
         const files = req.files as Express.Multer.File[];
 
@@ -75,15 +61,10 @@ router.post('/:id/files/upload', upload.array('files', 20), async (req: AuthRequ
     }
 });
 
-// Delete file
-router.delete('/:id/files', async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Delete file (requires canEditFiles)
+router.delete('/:id/files', requireProjectAccess(ProjectPermission.CAN_EDIT_FILES), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const filePath = req.query.path as string;
         if (!filePath) throw new AppError('File path is required', 400);
 
@@ -94,15 +75,10 @@ router.delete('/:id/files', async (req: AuthRequest, res: Response, next: NextFu
     }
 });
 
-// Create directory
-router.post('/:id/files/mkdir', async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Create directory (requires canEditFiles)
+router.post('/:id/files/mkdir', requireProjectAccess(ProjectPermission.CAN_EDIT_FILES), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const { path: dirPath } = req.body;
         if (!dirPath) throw new AppError('Directory path is required', 400);
 
@@ -113,15 +89,10 @@ router.post('/:id/files/mkdir', async (req: AuthRequest, res: Response, next: Ne
     }
 });
 
-// Read file content (for editor)
-router.get('/:id/files/read', async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Read file content (any collaborator can view)
+router.get('/:id/files/read', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const filePath = req.query.path as string;
         if (!filePath) throw new AppError('File path is required', 400);
 
@@ -132,15 +103,10 @@ router.get('/:id/files/read', async (req: AuthRequest, res: Response, next: Next
     }
 });
 
-// Save file content (from editor)
-router.put('/:id/files/write', async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Save file content (requires canEditFiles)
+router.put('/:id/files/write', requireProjectAccess(ProjectPermission.CAN_EDIT_FILES), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const { path: filePath, content } = req.body;
         if (!filePath) throw new AppError('File path is required', 400);
         if (typeof content !== 'string') throw new AppError('Content must be a string', 400);
@@ -158,15 +124,10 @@ router.put('/:id/files/write', async (req: AuthRequest, res: Response, next: Nex
     }
 });
 
-// Create new file
-router.post('/:id/files/create', async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Create new file (requires canEditFiles)
+router.post('/:id/files/create', requireProjectAccess(ProjectPermission.CAN_EDIT_FILES), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const projectRepo = AppDataSource.getRepository(Project);
-        const project = await projectRepo.findOne({
-            where: { id: req.params.id as string, userId: req.user!.id },
-        });
-        if (!project) throw new AppError('Project not found', 404);
-
+        const project = (req as any).project as Project;
         const { path: filePath, content } = req.body;
         if (!filePath) throw new AppError('File path is required', 400);
 

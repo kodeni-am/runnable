@@ -15,7 +15,7 @@ router.get('/users', async (req, res, next: NextFunction) => {
         const userRepo = AppDataSource.getRepository(User);
         const users = await userRepo.find({
             order: { createdAt: 'DESC' },
-            select: ['id', 'email', 'username', 'role', 'isApproved', 'createdAt', 'githubId', 'googleId'],
+            select: ['id', 'email', 'username', 'role', 'isApproved', 'createdAt', 'githubId', 'googleId', 'permissions'],
         });
         res.json(users);
     } catch (error) {
@@ -37,6 +37,30 @@ router.put('/users/:id/approve', async (req, res, next: NextFunction) => {
         await userRepo.save(user);
 
         res.json({ message: 'User approved' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Update user permissions (Tier 1 global permissions)
+router.put('/users/:id/permissions', async (req, res, next: NextFunction) => {
+    try {
+        const userRepo = AppDataSource.getRepository(User);
+        const user = await userRepo.findOne({ where: { id: req.params.id as string } });
+
+        if (!user) {
+            throw new AppError('User not found', 404);
+        }
+
+        const { permissions } = req.body;
+        if (!permissions) {
+            throw new AppError('Permissions object is required', 400);
+        }
+
+        user.permissions = permissions;
+        await userRepo.save(user);
+
+        res.json({ message: 'Permissions updated', permissions: user.permissions });
     } catch (error) {
         next(error);
     }

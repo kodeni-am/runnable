@@ -3,4 +3,5 @@ export { Project } from './Project';
 export { GithubRepo } from './GithubRepo';
 export { CustomDomain } from './CustomDomain';
 export { AppSettings } from './AppSettings';
-export { Role, ServerType, ServiceStatus } from './enums';
+export { ProjectCollaborator } from './ProjectCollaborator';
+export { Role, ServerType, ServiceStatus, ProjectPermission } from './enums';

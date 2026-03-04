@@ -12,6 +12,7 @@ import { ServerType, ServiceStatus } from './enums';
 import { User } from './User';
 import { GithubRepo } from './GithubRepo';
 import { CustomDomain } from './CustomDomain';
+import { ProjectCollaborator } from './ProjectCollaborator';
 
 @Entity('projects')
 export class Project {
@@ -65,6 +66,9 @@ export class Project {
 
     @OneToMany(() => CustomDomain, (domain) => domain.project, { cascade: true })
     customDomains: CustomDomain[];
+
+    @OneToMany(() => ProjectCollaborator, (collab) => collab.project, { cascade: true })
+    collaborators: ProjectCollaborator[];
 
     @CreateDateColumn()
     createdAt: Date;

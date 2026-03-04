@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
-import { projectsApi, type Project } from '../api/projects';
+import { projectsApi, type Project, type Collaborator, type ProjectPermissions } from '../api/projects';
+import { useAuthStore } from '../store/authStore';
 import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
 import FileBrowser from '../components/FileBrowser';
@@ -9,15 +10,25 @@ import LogViewer from '../components/LogViewer';
 import { usePageTitle } from '../hooks/usePageTitle';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
-    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit
+    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus
 } from 'lucide-react';
+
+const DEFAULT_COLLAB_PERMS: ProjectPermissions = {
+    canStart: false,
+    canEditConfig: false,
+    canEditDomains: false,
+    canEditFiles: false,
+    canDelete: false,
+    canViewLogs: true,
+};
 
 export default function ProjectDetail() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
     const { currentProject, fetchProject, deleteProject } = useProjectStore();
+    const { user: currentUser } = useAuthStore();
     usePageTitle(currentProject ? currentProject.name : 'Project Details');
-    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs' | 'settings'>('overview');
+    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs' | 'settings' | 'collaborators'>('overview');
     const [actionLoading, setActionLoading] = useState('');
 
     // GitHub connect state
@@ -48,6 +59,30 @@ export default function ProjectDetail() {
     const [saveLoading, setSaveLoading] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
 
+    // Collaborator state
+    const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+    const [collabLoading, setCollabLoading] = useState(false);
+    const [showAddCollab, setShowAddCollab] = useState(false);
+    const [collabEmail, setCollabEmail] = useState('');
+    const [collabPerms, setCollabPerms] = useState<ProjectPermissions>({ ...DEFAULT_COLLAB_PERMS });
+    const [collabError, setCollabError] = useState('');
+    const [editingCollab, setEditingCollab] = useState<Collaborator | null>(null);
+    const [editCollabPerms, setEditCollabPerms] = useState<ProjectPermissions>({ ...DEFAULT_COLLAB_PERMS });
+
+    // Compute permissions for current user on this project
+    const isOwner = currentProject?.userId === currentUser?.id;
+    const isAdmin = currentUser?.role === 'admin';
+    const isCollaborator = !!(currentProject as any)?._isCollaborator;
+    const collabPermissions: ProjectPermissions = (currentProject as any)?._permissions ?? DEFAULT_COLLAB_PERMS;
+
+    const canStart = isOwner || isAdmin || collabPermissions.canStart;
+    const canEditConfig = isOwner || isAdmin || collabPermissions.canEditConfig;
+    const canEditDomains = isOwner || isAdmin || collabPermissions.canEditDomains;
+    const canEditFiles = isOwner || isAdmin || collabPermissions.canEditFiles;
+    const canDelete = isOwner || isAdmin || collabPermissions.canDelete;
+    const canViewLogs = isOwner || isAdmin || collabPermissions.canViewLogs;
+    const canManageCollaborators = isOwner || isAdmin;
+
     useEffect(() => {
         if (id) {
             fetchProject(id).then((res) => {
@@ -64,6 +99,7 @@ export default function ProjectDetail() {
 
     useEffect(() => {
         if (id && tab === 'domains') loadDomains();
+        if (id && tab === 'collaborators') loadCollaborators();
     }, [id, tab]);
 
     const loadDomains = async () => {
@@ -72,6 +108,16 @@ export default function ProjectDetail() {
             const { data } = await projectsApi.listDomains(id);
             setDomains(data);
         } catch { }
+    };
+
+    const loadCollaborators = async () => {
+        if (!id) return;
+        setCollabLoading(true);
+        try {
+            const { data } = await projectsApi.listCollaborators(id);
+            setCollaborators(data);
+        } catch { }
+        setCollabLoading(false);
     };
 
     const handleAction = async (action: 'start' | 'stop' | 'restart') => {
@@ -186,6 +232,40 @@ export default function ProjectDetail() {
         setSaveLoading(false);
     };
 
+    const handleAddCollaborator = async () => {
+        if (!id) return;
+        setCollabError('');
+        try {
+            await projectsApi.addCollaborator(id, collabEmail, collabPerms);
+            setShowAddCollab(false);
+            setCollabEmail('');
+            setCollabPerms({ ...DEFAULT_COLLAB_PERMS });
+            loadCollaborators();
+        } catch (err: any) {
+            setCollabError(err.response?.data?.error || 'Failed to add collaborator');
+        }
+    };
+
+    const handleUpdateCollaborator = async () => {
+        if (!id || !editingCollab) return;
+        setCollabError('');
+        try {
+            await projectsApi.updateCollaborator(id, editingCollab.userId, editCollabPerms);
+            setEditingCollab(null);
+            loadCollaborators();
+        } catch (err: any) {
+            setCollabError(err.response?.data?.error || 'Failed to update collaborator');
+        }
+    };
+
+    const handleRemoveCollaborator = async (userId: string) => {
+        if (!id || !confirm('Remove this collaborator?')) return;
+        try {
+            await projectsApi.removeCollaborator(id, userId);
+            loadCollaborators();
+        } catch { }
+    };
+
     const addEnvVar = () => setEnvVars([...envVars, { key: '', value: '' }]);
     const removeEnvVar = (index: number) => setEnvVars(envVars.filter((_, i) => i !== index));
     const updateEnvVar = (index: number, field: 'key' | 'value', value: string) => {
@@ -193,6 +273,13 @@ export default function ProjectDetail() {
         newEnvs[index][field] = value;
         setEnvVars(newEnvs);
     };
+
+    const PermCheckbox = ({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) => (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+            {label}
+        </label>
+    );
 
     if (!currentProject) {
         return (
@@ -206,6 +293,15 @@ export default function ProjectDetail() {
 
     const p = currentProject;
 
+    // Build tabs list based on permissions
+    const availableTabs: typeof tab[] = ['overview'];
+    availableTabs.push('files');
+    availableTabs.push('github');
+    availableTabs.push('domains');
+    if (canViewLogs) availableTabs.push('logs');
+    if (canEditConfig) availableTabs.push('settings');
+    if (canManageCollaborators) availableTabs.push('collaborators');
+
     return (
         <Layout>
             <div className="page-header">
@@ -215,7 +311,20 @@ export default function ProjectDetail() {
                             <ArrowLeft size={20} />
                         </button>
                         <div>
-                            <h1>{p.name}</h1>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <h1>{p.name}</h1>
+                                {isCollaborator && (
+                                    <span style={{
+                                        padding: '2px 8px',
+                                        borderRadius: 12,
+                                        fontSize: 11,
+                                        background: 'rgba(100, 180, 255, 0.15)',
+                                        color: '#64b4ff',
+                                    }}>
+                                        Shared
+                                    </span>
+                                )}
+                            </div>
                             <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>
                                 {p.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}
                             </span>
@@ -223,25 +332,31 @@ export default function ProjectDetail() {
                         <StatusBadge status={p.status} />
                     </div>
                     <div className="detail-actions">
-                        <button className="btn btn-secondary" onClick={() => handleAction('start')} disabled={p.status === 'running' || !!actionLoading}>
-                            {actionLoading === 'start' ? <span className="spinner" /> : <Play size={16} />} Start
-                        </button>
-                        <button className="btn btn-secondary" onClick={() => handleAction('stop')} disabled={p.status === 'stopped' || !!actionLoading}>
-                            {actionLoading === 'stop' ? <span className="spinner" /> : <Square size={16} />} Stop
-                        </button>
-                        <button className="btn btn-secondary" onClick={() => handleAction('restart')} disabled={!!actionLoading}>
-                            {actionLoading === 'restart' ? <span className="spinner" /> : <RotateCcw size={16} />} Restart
-                        </button>
-                        <button className="btn btn-danger" onClick={() => setShowDeleteConfirm(true)}>
-                            <Trash2 size={16} />
-                        </button>
+                        {canStart && (
+                            <>
+                                <button className="btn btn-secondary" onClick={() => handleAction('start')} disabled={p.status === 'running' || !!actionLoading}>
+                                    {actionLoading === 'start' ? <span className="spinner" /> : <Play size={16} />} Start
+                                </button>
+                                <button className="btn btn-secondary" onClick={() => handleAction('stop')} disabled={p.status === 'stopped' || !!actionLoading}>
+                                    {actionLoading === 'stop' ? <span className="spinner" /> : <Square size={16} />} Stop
+                                </button>
+                                <button className="btn btn-secondary" onClick={() => handleAction('restart')} disabled={!!actionLoading}>
+                                    {actionLoading === 'restart' ? <span className="spinner" /> : <RotateCcw size={16} />} Restart
+                                </button>
+                            </>
+                        )}
+                        {canDelete && (
+                            <button className="btn btn-danger" onClick={() => setShowDeleteConfirm(true)}>
+                                <Trash2 size={16} />
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
 
             <div className="page-content">
                 <div className="tabs">
-                    {(['overview', 'files', 'github', 'domains', 'logs', 'settings'] as const).map((t) => (
+                    {availableTabs.map((t) => (
                         <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
                             {t.charAt(0).toUpperCase() + t.slice(1)}
                         </button>
@@ -304,7 +419,7 @@ export default function ProjectDetail() {
                                             </div>
                                         )}
                                     </div>
-                                    <button className="btn btn-danger" onClick={handleGithubDisconnect}>Disconnect</button>
+                                    {canEditConfig && <button className="btn btn-danger" onClick={handleGithubDisconnect}>Disconnect</button>}
                                 </div>
                             </div>
                         ) : (
@@ -314,9 +429,11 @@ export default function ProjectDetail() {
                                 </div>
                                 <h2>No GitHub repo connected</h2>
                                 <p>Connect a repo to auto-deploy on push to main</p>
-                                <button className="btn btn-primary" onClick={() => setShowGithub(true)}>
-                                    <FolderGit2 size={18} /> Connect Repository
-                                </button>
+                                {canEditConfig && (
+                                    <button className="btn btn-primary" onClick={() => setShowGithub(true)}>
+                                        <FolderGit2 size={18} /> Connect Repository
+                                    </button>
+                                )}
                             </div>
                         )}
 
@@ -351,9 +468,11 @@ export default function ProjectDetail() {
                     <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
                             <h3>Custom Domains</h3>
-                            <button className="btn btn-primary" onClick={() => setShowAddDomain(true)}>
-                                <Plus size={16} /> Add Domain
-                            </button>
+                            {canEditDomains && (
+                                <button className="btn btn-primary" onClick={() => setShowAddDomain(true)}>
+                                    <Plus size={16} /> Add Domain
+                                </button>
+                            )}
                         </div>
 
                         {domains.length === 0 ? (
@@ -386,28 +505,30 @@ export default function ProjectDetail() {
                                             )}
                                         </div>
                                     </div>
-                                    <div style={{ display: 'flex', gap: 8 }}>
-                                        <button
-                                            className="btn btn-secondary"
-                                            onClick={() => {
-                                                setEditingDomain(d);
-                                                setEditRedirectTarget(d.redirectTarget || '');
-                                                setShowEditRedirect(true);
-                                                setDomainError('');
-                                            }}
-                                            style={{ fontSize: 13, padding: '6px 12px' }}
-                                        >
-                                            <Edit size={14} style={{ marginRight: 4 }} /> Redirect
-                                        </button>
-                                        {!d.verified && (
-                                            <button className="btn btn-secondary" onClick={() => handleVerifyDomain(d.id)} style={{ fontSize: 13, padding: '6px 12px' }}>
-                                                Verify
+                                    {canEditDomains && (
+                                        <div style={{ display: 'flex', gap: 8 }}>
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={() => {
+                                                    setEditingDomain(d);
+                                                    setEditRedirectTarget(d.redirectTarget || '');
+                                                    setShowEditRedirect(true);
+                                                    setDomainError('');
+                                                }}
+                                                style={{ fontSize: 13, padding: '6px 12px' }}
+                                            >
+                                                <Edit size={14} style={{ marginRight: 4 }} /> Redirect
                                             </button>
-                                        )}
-                                        <button className="btn btn-danger" onClick={() => handleRemoveDomain(d.id)} style={{ fontSize: 13, padding: '6px 12px' }}>
-                                            Remove
-                                        </button>
-                                    </div>
+                                            {!d.verified && (
+                                                <button className="btn btn-secondary" onClick={() => handleVerifyDomain(d.id)} style={{ fontSize: 13, padding: '6px 12px' }}>
+                                                    Verify
+                                                </button>
+                                            )}
+                                            <button className="btn btn-danger" onClick={() => handleRemoveDomain(d.id)} style={{ fontSize: 13, padding: '6px 12px' }}>
+                                                Remove
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             ))
                         )}
@@ -468,7 +589,7 @@ export default function ProjectDetail() {
                 {tab === 'logs' && <LogViewer projectId={p.id} />}
 
                 {/* SETTINGS TAB */}
-                {tab === 'settings' && (
+                {tab === 'settings' && canEditConfig && (
                     <div className="settings-section glass">
                         <div style={{ maxWidth: 700 }}>
                             <h3 style={{ marginBottom: 20 }}>Project Configuration</h3>
@@ -562,6 +683,134 @@ export default function ProjectDetail() {
                                 </button>
                             </div>
                         </div>
+                    </div>
+                )}
+
+                {/* COLLABORATORS TAB */}
+                {tab === 'collaborators' && canManageCollaborators && (
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                            <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Users size={20} /> Collaborators
+                            </h3>
+                            <button className="btn btn-primary" onClick={() => { setShowAddCollab(true); setCollabError(''); }}>
+                                <UserPlus size={16} /> Invite
+                            </button>
+                        </div>
+
+                        {collabLoading ? (
+                            <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                                <div className="spinner" style={{ width: 30, height: 30 }} />
+                            </div>
+                        ) : collaborators.length === 0 ? (
+                            <div className="empty-state">
+                                <div className="empty-state-icon"><Users size={36} /></div>
+                                <h2>No collaborators</h2>
+                                <p>Invite users to collaborate on this project</p>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                {collaborators.map(c => (
+                                    <div key={c.id} className="glass" style={{ padding: 16, borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 600 }}>{c.username}</div>
+                                            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{c.email}</div>
+                                            <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                                                {Object.entries(c.permissions).filter(([, v]) => v).map(([key]) => (
+                                                    <span key={key} style={{
+                                                        padding: '2px 8px',
+                                                        borderRadius: 12,
+                                                        fontSize: 11,
+                                                        background: 'rgba(164, 118, 255, 0.15)',
+                                                        color: '#a476ff',
+                                                    }}>
+                                                        {key}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: 8 }}>
+                                            <button
+                                                className="btn btn-secondary"
+                                                style={{ fontSize: 13, padding: '6px 12px' }}
+                                                onClick={() => {
+                                                    setEditingCollab(c);
+                                                    setEditCollabPerms({ ...c.permissions });
+                                                    setCollabError('');
+                                                }}
+                                            >
+                                                <Edit size={14} /> Edit
+                                            </button>
+                                            <button
+                                                className="btn btn-danger"
+                                                style={{ fontSize: 13, padding: '6px 12px' }}
+                                                onClick={() => handleRemoveCollaborator(c.userId)}
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Add Collaborator Modal */}
+                        {showAddCollab && (
+                            <div className="modal-overlay" onClick={() => setShowAddCollab(false)}>
+                                <div className="modal glass" onClick={(e) => e.stopPropagation()}>
+                                    <h2>Invite Collaborator</h2>
+                                    {collabError && <div className="alert alert-error">{collabError}</div>}
+                                    <div className="form-group">
+                                        <label>Email or Username</label>
+                                        <input
+                                            className="form-input"
+                                            placeholder="user@example.com or username"
+                                            value={collabEmail}
+                                            onChange={(e) => setCollabEmail(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Permissions</label>
+                                        <div style={{ marginTop: 8 }}>
+                                            <PermCheckbox label="Can Start/Stop/Restart" checked={collabPerms.canStart} onChange={(v) => setCollabPerms({ ...collabPerms, canStart: v })} />
+                                            <PermCheckbox label="Can Edit Config" checked={collabPerms.canEditConfig} onChange={(v) => setCollabPerms({ ...collabPerms, canEditConfig: v })} />
+                                            <PermCheckbox label="Can Edit Domains" checked={collabPerms.canEditDomains} onChange={(v) => setCollabPerms({ ...collabPerms, canEditDomains: v })} />
+                                            <PermCheckbox label="Can Edit Files" checked={collabPerms.canEditFiles} onChange={(v) => setCollabPerms({ ...collabPerms, canEditFiles: v })} />
+                                            <PermCheckbox label="Can Delete Project" checked={collabPerms.canDelete} onChange={(v) => setCollabPerms({ ...collabPerms, canDelete: v })} />
+                                            <PermCheckbox label="Can View Logs" checked={collabPerms.canViewLogs} onChange={(v) => setCollabPerms({ ...collabPerms, canViewLogs: v })} />
+                                        </div>
+                                    </div>
+                                    <div className="modal-actions">
+                                        <button className="btn btn-secondary" onClick={() => setShowAddCollab(false)}>Cancel</button>
+                                        <button className="btn btn-primary" onClick={handleAddCollaborator} disabled={!collabEmail}>Invite</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Edit Collaborator Modal */}
+                        {editingCollab && (
+                            <div className="modal-overlay" onClick={() => setEditingCollab(null)}>
+                                <div className="modal glass" onClick={(e) => e.stopPropagation()}>
+                                    <h2>Edit Permissions for {editingCollab.username}</h2>
+                                    {collabError && <div className="alert alert-error">{collabError}</div>}
+                                    <div className="form-group">
+                                        <div style={{ marginTop: 8 }}>
+                                            <PermCheckbox label="Can Start/Stop/Restart" checked={editCollabPerms.canStart} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canStart: v })} />
+                                            <PermCheckbox label="Can Edit Config" checked={editCollabPerms.canEditConfig} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canEditConfig: v })} />
+                                            <PermCheckbox label="Can Edit Domains" checked={editCollabPerms.canEditDomains} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canEditDomains: v })} />
+                                            <PermCheckbox label="Can Edit Files" checked={editCollabPerms.canEditFiles} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canEditFiles: v })} />
+                                            <PermCheckbox label="Can Delete Project" checked={editCollabPerms.canDelete} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canDelete: v })} />
+                                            <PermCheckbox label="Can View Logs" checked={editCollabPerms.canViewLogs} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canViewLogs: v })} />
+                                        </div>
+                                    </div>
+                                    <div className="modal-actions">
+                                        <button className="btn btn-secondary" onClick={() => setEditingCollab(null)}>Cancel</button>
+                                        <button className="btn btn-primary" onClick={handleUpdateCollaborator}>Save</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
