@@ -120,8 +120,8 @@ export class SandboxService {
             try {
                 const cgroupDir = `/sys/fs/cgroup/runnable/${sandboxUser}`;
                 await execFileAsync('sudo', ['-n', 'mkdir', '-p', cgroupDir]);
-                await execFileAsync('sudo', ['-n', 'tee', `${cgroupDir}/memory.max`], { input: '512M\n' } as any);
-                await execFileAsync('sudo', ['-n', 'tee', `${cgroupDir}/cpu.max`], { input: '100000 100000\n' } as any);
+                await execFileAsync('sudo', ['-n', 'sh', '-c', `echo 512M > ${cgroupDir}/memory.max`]);
+                await execFileAsync('sudo', ['-n', 'sh', '-c', `echo "100000 100000" > ${cgroupDir}/cpu.max`]);
             } catch {
                 console.warn(`Could not set cgroup limits for ${sandboxUser}`);
             }
