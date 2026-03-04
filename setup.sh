@@ -174,9 +174,9 @@ ${DOMAIN} {
         # Proxy WebSocket to backend
         reverse_proxy /socket.io/* localhost:3001
 
-        # SPA: try real files first, fallback to index.html
-        try_files {path} /index.html
+        # SPA: root must be set before try_files
         root * ${INSTALL_DIR}/client/dist
+        try_files {path} /index.html
         file_server
     }
 
