@@ -214,13 +214,12 @@ router.get('/me', authenticate, (req: AuthRequest, res: Response) => {
 });
 
 // GitHub OAuth
-// Allow passing an optional token to link to an existing account
 router.get('/github', (req: Request, res: Response, next: NextFunction) => {
-    const token = req.query.token as string;
-    passport.authenticate('github', {
-        session: false,
-        state: token ? Buffer.from(JSON.stringify({ token })).toString('base64') : undefined
-    })(req, res, next);
+    // Pass accessToken cookie (for linking) and redirect path in state
+    const accessToken = req.cookies?.accessToken;
+    const redirect = req.query.redirect as string || '';
+    const state = Buffer.from(JSON.stringify({ token: accessToken || '', redirect })).toString('base64');
+    passport.authenticate('github', { session: false, state })(req, res, next);
 });
 
 router.get(
@@ -229,33 +228,23 @@ router.get(
     (req: Request, res: Response) => {
         const result = req.user as any;
         const clientUrl = process.env.CLIENT_URL || 'http://localhost:5175';
-        const isProduction = process.env.NODE_ENV === 'production';
-        res.cookie('accessToken', result.accessToken, {
-            httpOnly: true,
-            secure: isProduction,
-            sameSite: 'lax',
-            maxAge: 15 * 60 * 1000, // 15 min
-            path: '/',
-        });
-        res.cookie('refreshToken', result.refreshToken, {
-            httpOnly: true,
-            secure: isProduction,
-            sameSite: 'lax',
-            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-            path: '/',
-        });
-        res.redirect(`${clientUrl}/auth/callback`);
+        setAuthCookies(res, result.accessToken, result.refreshToken);
+        // Redirect to the original page if specified
+        let redirect = '/auth/callback';
+        try {
+            const state = JSON.parse(Buffer.from(req.query.state as string || '', 'base64').toString());
+            if (state.redirect) redirect = state.redirect;
+        } catch { }
+        res.redirect(`${clientUrl}${redirect}`);
     }
 );
 
 // Google OAuth
 router.get('/google', (req: Request, res: Response, next: NextFunction) => {
-    const token = req.query.token as string;
-    passport.authenticate('google', {
-        session: false,
-        scope: ['profile', 'email'],
-        state: token ? Buffer.from(JSON.stringify({ token })).toString('base64') : undefined
-    })(req, res, next);
+    const accessToken = req.cookies?.accessToken;
+    const redirect = req.query.redirect as string || '';
+    const state = Buffer.from(JSON.stringify({ token: accessToken || '', redirect })).toString('base64');
+    passport.authenticate('google', { session: false, scope: ['profile', 'email'], state })(req, res, next);
 });
 
 router.get(
@@ -264,22 +253,13 @@ router.get(
     (req: Request, res: Response) => {
         const result = req.user as any;
         const clientUrl = process.env.CLIENT_URL || 'http://localhost:5175';
-        const isProduction = process.env.NODE_ENV === 'production';
-        res.cookie('accessToken', result.accessToken, {
-            httpOnly: true,
-            secure: isProduction,
-            sameSite: 'lax',
-            maxAge: 15 * 60 * 1000,
-            path: '/',
-        });
-        res.cookie('refreshToken', result.refreshToken, {
-            httpOnly: true,
-            secure: isProduction,
-            sameSite: 'lax',
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-            path: '/',
-        });
-        res.redirect(`${clientUrl}/auth/callback`);
+        setAuthCookies(res, result.accessToken, result.refreshToken);
+        let redirect = '/auth/callback';
+        try {
+            const state = JSON.parse(Buffer.from(req.query.state as string || '', 'base64').toString());
+            if (state.redirect) redirect = state.redirect;
+        } catch { }
+        res.redirect(`${clientUrl}${redirect}`);
     }
 );
 

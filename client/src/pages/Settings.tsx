@@ -36,7 +36,7 @@ export default function Settings() {
                                     <span style={{ color: 'var(--status-running)' }}>✓ Connected</span>
                                 ) : (
                                     <a
-                                        href="/api/auth/github"
+                                        href="/api/auth/github?redirect=/settings"
                                         className="btn btn-secondary"
                                         style={{ fontSize: 13, padding: '6px 14px' }}
                                     >
@@ -52,7 +52,7 @@ export default function Settings() {
                                     <span style={{ color: 'var(--status-running)' }}>✓ Connected</span>
                                 ) : (
                                     <a
-                                        href="/api/auth/google"
+                                        href="/api/auth/google?redirect=/settings"
                                         className="btn btn-secondary"
                                         style={{ fontSize: 13, padding: '6px 14px' }}
                                     >
