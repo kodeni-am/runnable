@@ -30,7 +30,10 @@ export class SandboxService {
 
             if (config.sandbox.enabled) {
                 const sandboxUser = `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`;
-                child = spawn('sudo', ['-n', '-u', sandboxUser, command, ...args], { cwd, env: processEnv });
+                const envArgs = Object.entries(env || {}).map(([k, v]) => `${k}=${v}`);
+                child = spawn('sudo', ['-n', '-u', sandboxUser,
+                    'env', `PATH=${processEnv.PATH || '/usr/local/bin:/usr/bin:/bin'}`, ...envArgs,
+                    command, ...args], { cwd, env: processEnv });
             } else {
                 child = spawn(command, args, { cwd, env: processEnv });
             }
@@ -74,8 +77,11 @@ export class SandboxService {
 
         return new Promise((resolve, reject) => {
             const processEnv = { ...process.env, ...env };
+            const envArgs = Object.entries(env || {}).map(([k, v]) => `${k}=${v}`);
             const child = config.sandbox.enabled
-                ? spawn('sudo', ['-n', '-u', `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`, command, ...args], { cwd, env: processEnv })
+                ? spawn('sudo', ['-n', '-u', `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`,
+                    'env', `PATH=${processEnv.PATH || '/usr/local/bin:/usr/bin:/bin'}`, ...envArgs,
+                    command, ...args], { cwd, env: processEnv })
                 : spawn(command, args, { cwd, env: processEnv });
 
             child.stdout?.on('data', (data) => logStream.write(data));
