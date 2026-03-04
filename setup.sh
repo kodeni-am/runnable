@@ -268,12 +268,12 @@ MAX_UPLOAD_SIZE_MB=512
 # ── GitHub OAuth (fill in after creating GitHub App) ──
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
-GITHUB_CALLBACK_URL=https://api.${DOMAIN}/api/auth/github/callback
+GITHUB_CALLBACK_URL=https://${DOMAIN}/api/auth/github/callback
 
 # ── Google OAuth (optional) ──
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-GOOGLE_CALLBACK_URL=https://api.${DOMAIN}/api/auth/google/callback
+GOOGLE_CALLBACK_URL=https://${DOMAIN}/api/auth/google/callback
 
 # ── Caddy ──
 CADDY_CONFIG_DIR=/etc/caddy/sites
