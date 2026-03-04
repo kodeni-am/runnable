@@ -1,4 +1,5 @@
 import { Router, Response, NextFunction } from 'express';
+import fs from 'fs/promises';
 import path from 'path';
 import { AppDataSource } from '../config/data-source';
 import { Project, ServerType, ServiceStatus } from '../entities';
@@ -158,6 +159,11 @@ router.delete('/:id', async (req: AuthRequest, res: Response, next: NextFunction
 
         // Destroy sandbox
         await SandboxService.destroySandbox(project.id);
+
+        // Remove project directory (cloned repo + build artifacts)
+        if (project.directoryPath) {
+            await fs.rm(project.directoryPath, { recursive: true, force: true }).catch(() => { });
+        }
 
         await projectRepo.remove(project);
         res.json({ message: 'Project deleted' });
