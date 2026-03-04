@@ -72,7 +72,7 @@ export class ServerConfigService {
         if (options.serverType === ServerType.STATIC) {
             configStr += `${domainList} {
   root * ${options.directoryPath}
-  file_server browse
+  file_server
   encode gzip zstd
   log {
     output file /var/log/caddy/${options.subdomain}.log
