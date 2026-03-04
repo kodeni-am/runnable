@@ -67,10 +67,6 @@ export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNe
     const pendingContentRef = useRef<string | null>(null);
     const saveRef = useRef<() => void>(() => { });
 
-    const actualPath = isNewFile
-        ? (currentDir ? `${currentDir}/${newFileName}` : newFileName)
-        : filePath;
-
     // Keep saveRef always pointing to latest handleSave
     const handleSave = async () => {
         if (!viewRef.current) return;
