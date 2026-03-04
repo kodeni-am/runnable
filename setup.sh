@@ -164,19 +164,20 @@ api.${DOMAIN} {
 
 # Client (static build)
 ${DOMAIN} {
-    root * ${INSTALL_DIR}/client/dist
-    file_server
     encode gzip zstd
 
-    # SPA fallback — serve index.html for all routes
-    try_files {path} /index.html
+    # Deterministic ordering — API/WebSocket MUST be matched before SPA fallback
+    route {
+        # Proxy API to backend
+        reverse_proxy /api/* localhost:3001
 
-    # Proxy API and WebSocket to the backend
-    handle /api/* {
-        reverse_proxy localhost:3001
-    }
-    handle /socket.io/* {
-        reverse_proxy localhost:3001
+        # Proxy WebSocket to backend
+        reverse_proxy /socket.io/* localhost:3001
+
+        # SPA: try real files first, fallback to index.html
+        try_files {path} /index.html
+        root * ${INSTALL_DIR}/client/dist
+        file_server
     }
 
     log {
