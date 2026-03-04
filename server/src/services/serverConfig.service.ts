@@ -61,7 +61,7 @@ export class ServerConfigService {
   file_server browse
   encode gzip zstd
   log {
-    output file ./storage/logs/${options.subdomain}.log
+    output file /var/log/caddy/${options.subdomain}.log
   }
 }
 `;
@@ -71,7 +71,7 @@ export class ServerConfigService {
   reverse_proxy localhost:${options.port}
   encode gzip zstd
   log {
-    output file ./storage/logs/${options.subdomain}.log
+    output file /var/log/caddy/${options.subdomain}.log
   }
 }
 `;
