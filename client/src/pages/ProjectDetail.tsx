@@ -295,9 +295,9 @@ export default function ProjectDetail() {
 
     // Build tabs list based on permissions
     const availableTabs: typeof tab[] = ['overview'];
-    availableTabs.push('files');
+    if (canEditFiles) availableTabs.push('files');
     availableTabs.push('github');
-    availableTabs.push('domains');
+    if (canEditDomains) availableTabs.push('domains');
     if (canViewLogs) availableTabs.push('logs');
     if (canEditConfig) availableTabs.push('settings');
     if (canManageCollaborators) availableTabs.push('collaborators');
