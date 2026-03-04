@@ -4,8 +4,10 @@ import { adminApi } from '../api/admin';
 import type { UserDTO } from '../api/admin';
 import { ShieldAlert, Trash2, CheckCircle, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export default function Admin() {
+    usePageTitle('Admin');
     const { user: currentUser } = useAuthStore();
     const [users, setUsers] = useState<UserDTO[]>([]);
     const [loading, setLoading] = useState(true);

@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { useAuthStore } from '../store/authStore';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export default function PendingApproval() {
+    usePageTitle('Pending Approval');
     const { logout, loadUser } = useAuthStore();
 
     useEffect(() => {

@@ -1,8 +1,10 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export default function AuthCallback() {
+    usePageTitle('Authenticating...');
     const { loadUser } = useAuthStore();
     const navigate = useNavigate();
 

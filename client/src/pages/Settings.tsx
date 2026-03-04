@@ -1,8 +1,10 @@
 import Layout from '../components/Layout';
 import { useAuthStore } from '../store/authStore';
 import { Shield, User, Key } from 'lucide-react';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export default function Settings() {
+    usePageTitle('Settings');
     const { user } = useAuthStore();
 
     return (

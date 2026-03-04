@@ -4,8 +4,10 @@ import { useProjectStore } from '../store/projectStore';
 import { Plus, Server, FolderGit2, Globe } from 'lucide-react';
 import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export default function Dashboard() {
+    usePageTitle('Dashboard');
     const { projects, isLoading, fetchProjects } = useProjectStore();
     const navigate = useNavigate();
     const [showCreate, setShowCreate] = useState(false);

@@ -6,6 +6,7 @@ import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
 import FileBrowser from '../components/FileBrowser';
 import LogViewer from '../components/LogViewer';
+import { usePageTitle } from '../hooks/usePageTitle';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
     FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink
@@ -15,6 +16,7 @@ export default function ProjectDetail() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
     const { currentProject, fetchProject, deleteProject } = useProjectStore();
+    usePageTitle(currentProject ? currentProject.name : 'Project Details');
     const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs' | 'settings'>('overview');
     const [actionLoading, setActionLoading] = useState('');
 

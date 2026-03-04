@@ -2,8 +2,10 @@ import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { Github, Mail } from 'lucide-react';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export default function Login() {
+    usePageTitle('Login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
