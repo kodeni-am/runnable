@@ -20,7 +20,9 @@ export default function Layout({ children }: LayoutProps) {
         <div className="app-layout">
             <aside className="sidebar">
                 <div className="sidebar-header">
-                    <div className="sidebar-logo">R</div>
+                    <div className="sidebar-logo">
+                        <img src="/logo.svg" alt="Runnable" />
+                    </div>
                     <span className="sidebar-title gradient-text">Runnable</span>
                 </div>
 

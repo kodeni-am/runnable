@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+    <defs>
+        <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#0f172a" />
+            <stop offset="100%" stop-color="#1e1b4b" />
+        </linearGradient>
+        <linearGradient id="primary" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#3b82f6" />
+            <stop offset="100%" stop-color="#8b5cf6" />
+        </linearGradient>
+        <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#8b5cf6" />
+            <stop offset="100%" stop-color="#f43f5e" />
+        </linearGradient>
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="12" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+    </defs>
+    
+    <rect width="512" height="512" rx="112" fill="url(#bg)" />
+    <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#475569" stroke-width="2" opacity="0.3" />
+
+    <g transform="translate(34, 0)">
+        <path d="M 160 136 L 64 256 L 160 376" fill="none" stroke="url(#primary)" stroke-width="56" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M 220 136 L 380 256 L 220 376 Z" fill="url(#accent)" filter="url(#glow)" />
+        <path d="M 220 136 L 380 256 L 220 376 Z" fill="url(#accent)" />
+    </g>
+</svg>
