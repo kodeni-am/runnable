@@ -21,6 +21,9 @@ export class CustomDomain {
     @Column({ default: false })
     verified: boolean;
 
+    @Column({ type: 'varchar', nullable: true })
+    redirectTarget: string | null;
+
     @ManyToOne(() => Project, (project) => project.customDomains, { onDelete: 'CASCADE' })
     project: Project;
 

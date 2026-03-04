@@ -27,6 +27,7 @@ export interface Project {
         domain: string;
         verified: boolean;
         sslProvisioned: boolean;
+        redirectTarget?: string;
     }[];
     createdAt: string;
     updatedAt: string;
@@ -60,7 +61,10 @@ export const projectsApi = {
 
     // Custom domains
     listDomains: (id: string) => api.get(`/projects/${id}/domains`),
-    addDomain: (id: string, domain: string) => api.post(`/projects/${id}/domains`, { domain }),
+    addDomain: (id: string, domain: string, redirectTarget?: string) =>
+        api.post(`/projects/${id}/domains`, { domain, redirectTarget }),
+    updateDomainRedirect: (id: string, domainId: string, redirectTarget: string | null) =>
+        api.put(`/projects/${id}/domains/${domainId}/redirect`, { redirectTarget }),
     verifyDomain: (id: string, domainId: string) => api.post(`/projects/${id}/domains/${domainId}/verify`),
     removeDomain: (id: string, domainId: string) => api.delete(`/projects/${id}/domains/${domainId}`),
 

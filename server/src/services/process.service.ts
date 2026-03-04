@@ -181,11 +181,13 @@ export class ProcessService {
         const configContent = await ServerConfigService.generateConfig({
             subdomain: project.subdomain,
             directoryPath: project.directoryPath,
-            port: actualPort,
-            serverType: project.serverType,
-            customDomains,
+            port: (project as any).port || 8080,
+            serverType: (project as any).serverType || ServerType.STATIC,
+            customDomains: (project as any).customDomains?.map((cd: any) => ({
+                domain: cd.domain,
+                redirectTarget: cd.redirectTarget || null
+            })) || [],
         });
-
         const configPath = await ServerConfigService.writeConfig(
             project.subdomain,
             configContent,

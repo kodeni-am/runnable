@@ -9,7 +9,7 @@ import LogViewer from '../components/LogViewer';
 import { usePageTitle } from '../hooks/usePageTitle';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
-    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink
+    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit
 } from 'lucide-react';
 
 export default function ProjectDetail() {
@@ -29,8 +29,14 @@ export default function ProjectDetail() {
     // Domain state
     const [showAddDomain, setShowAddDomain] = useState(false);
     const [newDomain, setNewDomain] = useState('');
+    const [newRedirectTarget, setNewRedirectTarget] = useState('');
     const [domainError, setDomainError] = useState('');
     const [domains, setDomains] = useState<any[]>([]);
+
+    // Edit Redirect state
+    const [showEditRedirect, setShowEditRedirect] = useState(false);
+    const [editingDomain, setEditingDomain] = useState<any>(null);
+    const [editRedirectTarget, setEditRedirectTarget] = useState('');
 
     // Delete state
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -112,12 +118,27 @@ export default function ProjectDetail() {
         if (!id) return;
         setDomainError('');
         try {
-            await projectsApi.addDomain(id, newDomain);
+            await projectsApi.addDomain(id, newDomain, newRedirectTarget || undefined);
             setShowAddDomain(false);
             setNewDomain('');
+            setNewRedirectTarget('');
             loadDomains();
         } catch (err: any) {
             setDomainError(err.response?.data?.error || 'Failed to add domain');
+        }
+    };
+
+    const handleEditRedirect = async () => {
+        if (!id || !editingDomain) return;
+        setDomainError('');
+        try {
+            await projectsApi.updateDomainRedirect(id, editingDomain.id, editRedirectTarget || null);
+            setShowEditRedirect(false);
+            setEditingDomain(null);
+            setEditRedirectTarget('');
+            loadDomains();
+        } catch (err: any) {
+            setDomainError(err.response?.data?.error || 'Failed to update redirect');
         }
     };
 
@@ -345,7 +366,14 @@ export default function ProjectDetail() {
                             domains.map((d: any) => (
                                 <div key={d.id} className="domain-item glass">
                                     <div>
-                                        <div style={{ fontWeight: 600 }}>{d.domain}</div>
+                                        <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            {d.domain}
+                                            {d.redirectTarget && (
+                                                <span className="badge badge-info" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                                                    <Link size={12} /> Redirects to {d.redirectTarget}
+                                                </span>
+                                            )}
+                                        </div>
                                         <div className="domain-status">
                                             {d.verified ? (
                                                 <span style={{ color: 'var(--status-running)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -359,6 +387,18 @@ export default function ProjectDetail() {
                                         </div>
                                     </div>
                                     <div style={{ display: 'flex', gap: 8 }}>
+                                        <button
+                                            className="btn btn-secondary"
+                                            onClick={() => {
+                                                setEditingDomain(d);
+                                                setEditRedirectTarget(d.redirectTarget || '');
+                                                setShowEditRedirect(true);
+                                                setDomainError('');
+                                            }}
+                                            style={{ fontSize: 13, padding: '6px 12px' }}
+                                        >
+                                            <Edit size={14} style={{ marginRight: 4 }} /> Redirect
+                                        </button>
                                         {!d.verified && (
                                             <button className="btn btn-secondary" onClick={() => handleVerifyDomain(d.id)} style={{ fontSize: 13, padding: '6px 12px' }}>
                                                 Verify
@@ -372,6 +412,31 @@ export default function ProjectDetail() {
                             ))
                         )}
 
+                        {showEditRedirect && editingDomain && (
+                            <div className="modal-overlay" onClick={() => setShowEditRedirect(false)}>
+                                <div className="modal glass" onClick={(e) => e.stopPropagation()}>
+                                    <h2>Redirect Target for {editingDomain.domain}</h2>
+                                    {domainError && <div className="alert alert-error">{domainError}</div>}
+                                    <div className="form-group">
+                                        <label>Target Domain (Optional)</label>
+                                        <input
+                                            className="form-input"
+                                            placeholder="e.g. example.com"
+                                            value={editRedirectTarget}
+                                            onChange={(e) => setEditRedirectTarget(e.target.value)}
+                                        />
+                                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                            Leave empty to disable redirection and serve the project normally. Do not include http:// or https://
+                                        </p>
+                                    </div>
+                                    <div className="modal-actions">
+                                        <button className="btn btn-secondary" onClick={() => setShowEditRedirect(false)}>Cancel</button>
+                                        <button className="btn btn-primary" onClick={handleEditRedirect}>Save Redirect</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {showAddDomain && (
                             <div className="modal-overlay" onClick={() => setShowAddDomain(false)}>
                                 <div className="modal glass" onClick={(e) => e.stopPropagation()}>
@@ -380,6 +445,11 @@ export default function ProjectDetail() {
                                     <div className="form-group">
                                         <label>Domain</label>
                                         <input className="form-input" placeholder="mysite.com" value={newDomain} onChange={(e) => setNewDomain(e.target.value)} />
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Redirect Target (Optional)</label>
+                                        <input className="form-input" placeholder="e.g. anothersite.com" value={newRedirectTarget} onChange={(e) => setNewRedirectTarget(e.target.value)} />
+                                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>If set, traffic to this domain will redirect to the target domain.</p>
                                     </div>
                                     <div className="alert alert-info">
                                         After adding, you'll need to set up a CNAME record pointing to <strong>{p.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}</strong>

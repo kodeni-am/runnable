@@ -104,6 +104,42 @@ export class DomainService {
         await DomainService.regenerateProjectConfig(projectId);
     }
 
+    static async setRedirectTarget(domainId: string, redirectTarget: string | null): Promise<CustomDomain> {
+        const domainRepo = AppDataSource.getRepository(CustomDomain);
+        const customDomain = await domainRepo.findOne({
+            where: { id: domainId },
+            relations: ['project'],
+        });
+
+        if (!customDomain) {
+            throw new AppError('Domain not found', 404);
+        }
+
+        // Validate basic URL shape if target is provided
+        if (redirectTarget) {
+            try {
+                // Ensure it's just a hostname/domain name, or sanitize it
+                const sanitized = redirectTarget.trim().toLowerCase();
+                // Extremely basic sanity check — it shouldn't contain spaces or scheme
+                if (sanitized.includes(' ') || sanitized.includes('://')) {
+                    throw new AppError('Redirect target must be a valid domain (e.g. example.com), without http://', 400);
+                }
+                customDomain.redirectTarget = sanitized;
+            } catch (err: any) {
+                throw new AppError(err.message, 400);
+            }
+        } else {
+            customDomain.redirectTarget = null;
+        }
+
+        await domainRepo.save(customDomain);
+
+        // Regenerate config with the new redirect instruction
+        await DomainService.regenerateProjectConfig(customDomain.project.id);
+
+        return customDomain;
+    }
+
     private static async regenerateProjectConfig(projectId: string): Promise<void> {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
@@ -113,16 +149,15 @@ export class DomainService {
 
         if (!project) return;
 
-        const verifiedDomains = (project.customDomains || [])
-            .filter(d => d.verified)
-            .map(d => d.domain);
-
         const configContent = await ServerConfigService.generateConfig({
             subdomain: project.subdomain,
             directoryPath: project.directoryPath,
             port: project.port || 8080,
             serverType: project.serverType,
-            customDomains: verifiedDomains,
+            customDomains: project.customDomains?.map(cd => ({
+                domain: cd.domain,
+                redirectTarget: cd.redirectTarget || null
+            })) || [],
         });
 
         await ServerConfigService.writeConfig(project.subdomain, configContent, project.serverType);

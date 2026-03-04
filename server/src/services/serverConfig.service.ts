@@ -8,12 +8,13 @@ interface ServerConfigOptions {
     directoryPath: string;
     port: number;
     serverType: ServerType;
-    customDomains?: string[];
+    customDomains?: { domain: string, redirectTarget: string | null }[];
 }
 
 export class ServerConfigService {
     // Strict domain validation to prevent config injection
     private static sanitizeDomain(domain: string): string {
+        if (!domain) return '';
         // Only allow valid domain characters: alphanumeric, dots, hyphens
         const sanitized = domain.trim().toLowerCase();
         if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(sanitized)) {
@@ -30,7 +31,10 @@ export class ServerConfigService {
         // Sanitize all domains before generating config
         options.subdomain = ServerConfigService.sanitizeDomain(options.subdomain);
         if (options.customDomains) {
-            options.customDomains = options.customDomains.map(d => ServerConfigService.sanitizeDomain(d));
+            options.customDomains = options.customDomains.map(d => ({
+                domain: ServerConfigService.sanitizeDomain(d.domain),
+                redirectTarget: d.redirectTarget ? ServerConfigService.sanitizeDomain(d.redirectTarget) : null
+            }));
         }
 
         switch (options.serverType) {
@@ -48,15 +52,25 @@ export class ServerConfigService {
     }
 
     static generateCaddyConfig(options: ServerConfigOptions): string {
-        const domains = [
+        const redirectedDomains = options.customDomains?.filter(d => Boolean(d.redirectTarget)) || [];
+        const normalCustomDomains = options.customDomains?.filter(d => !d.redirectTarget)?.map(d => d.domain) || [];
+
+        const mainDomains = [
             `${options.subdomain}.${config.hosting.baseDomain}`,
-            ...(options.customDomains || []),
+            ...normalCustomDomains,
         ];
 
-        const domainList = domains.join(', ');
+        let configStr = '';
+
+        // Add redirect blocks for each domain that has a redirectTarget
+        for (const rd of redirectedDomains) {
+            configStr += `${rd.domain} {\n  redir https://${rd.redirectTarget}{uri}\n}\n\n`;
+        }
+
+        const domainList = mainDomains.join(', ');
 
         if (options.serverType === ServerType.STATIC) {
-            return `${domainList} {
+            configStr += `${domainList} {
   root * ${options.directoryPath}
   file_server browse
   encode gzip zstd
@@ -65,9 +79,8 @@ export class ServerConfigService {
   }
 }
 `;
-        }
-
-        return `${domainList} {
+        } else {
+            configStr += `${domainList} {
   reverse_proxy localhost:${options.port}
   encode gzip zstd
   log {
@@ -75,6 +88,9 @@ export class ServerConfigService {
   }
 }
 `;
+        }
+
+        return configStr;
     }
 
     static generateNginxConfig(options: ServerConfigOptions): string {

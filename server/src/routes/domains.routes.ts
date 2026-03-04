@@ -36,11 +36,41 @@ router.post('/:id/domains', async (req: AuthRequest, res: Response, next: NextFu
         });
         if (!project) throw new AppError('Project not found', 404);
 
-        const { domain } = req.body;
+        const { domain, redirectTarget } = req.body;
         if (!domain) throw new AppError('Domain is required', 400);
 
         const result = await DomainService.addDomain(project.id, domain);
+
+        // If they provided a redirect target right away, set it
+        if (redirectTarget) {
+            await DomainService.setRedirectTarget(result.domain.id, redirectTarget);
+            result.domain.redirectTarget = redirectTarget.trim().toLowerCase();
+        }
+
         res.status(201).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Update redirect target
+router.put('/:id/domains/:domainId/redirect', async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const projectRepo = AppDataSource.getRepository(Project);
+        // Verify project ownership FIRST before letting them touch the domain
+        const project = await projectRepo.findOne({
+            where: { id: req.params.id as string, userId: req.user!.id },
+        });
+        if (!project) throw new AppError('Project not found', 404);
+
+        const { redirectTarget } = req.body;
+
+        // Setting it to null/empty string clears the redirect
+        const target = redirectTarget ? String(redirectTarget).trim() : null;
+
+        const updatedDomain = await DomainService.setRedirectTarget(req.params.domainId as string, target);
+
+        res.json(updatedDomain);
     } catch (error) {
         next(error);
     }

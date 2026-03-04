@@ -242,7 +242,10 @@ router.post('/:id/reload-proxy', async (req: AuthRequest, res: Response, next: N
             directoryPath: project.directoryPath,
             port: project.port || 80,
             serverType: project.serverType,
-            customDomains: project.customDomains?.map(cd => cd.domain) || [],
+            customDomains: project.customDomains?.map(cd => ({
+                domain: cd.domain,
+                redirectTarget: cd.redirectTarget || null
+            })) || [],
         });
 
         const configPath = await ServerConfigService.writeConfig(
