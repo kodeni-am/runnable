@@ -36,7 +36,7 @@ export default function Settings() {
                                     <span style={{ color: 'var(--status-running)' }}>✓ Connected</span>
                                 ) : (
                                     <a
-                                        href={`/api/auth/github?token=${localStorage.getItem('accessToken')}`}
+                                        href="/api/auth/github"
                                         className="btn btn-secondary"
                                         style={{ fontSize: 13, padding: '6px 14px' }}
                                     >
@@ -52,7 +52,7 @@ export default function Settings() {
                                     <span style={{ color: 'var(--status-running)' }}>✓ Connected</span>
                                 ) : (
                                     <a
-                                        href={`/api/auth/google?token=${localStorage.getItem('accessToken')}`}
+                                        href="/api/auth/google"
                                         className="btn btn-secondary"
                                         style={{ fontSize: 13, padding: '6px 14px' }}
                                     >
