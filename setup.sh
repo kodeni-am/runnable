@@ -321,6 +321,7 @@ ExecStart=$(which node) ${INSTALL_DIR}/server/dist/index.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
+Environment=BUILDKIT_HOST=docker-container://runnable-buildkit
 EnvironmentFile=${INSTALL_DIR}/.env
 
 # Logging
