@@ -68,6 +68,9 @@ export class FileManagerService {
 
         // Move from temp upload location to target
         await fs.rename(tempPath, targetPath);
+
+        // Ensure web-readable permissions
+        await fs.chmod(targetPath, 0o644);
     }
 
     static async getFilePath(baseDir: string, relativePath: string): Promise<string> {
@@ -129,7 +132,7 @@ export class FileManagerService {
 
     static async writeFile(baseDir: string, relativePath: string, content: string): Promise<void> {
         const fullPath = FileManagerService.validatePath(baseDir, relativePath);
-        await fs.mkdir(path.dirname(fullPath), { recursive: true });
-        await fs.writeFile(fullPath, content, 'utf-8');
+        await fs.mkdir(path.dirname(fullPath), { recursive: true, mode: 0o755 });
+        await fs.writeFile(fullPath, content, { encoding: 'utf-8', mode: 0o644 });
     }
 }

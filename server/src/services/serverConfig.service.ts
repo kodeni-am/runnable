@@ -146,9 +146,8 @@ ${aliases}
             const { execFile } = await import('child_process');
             const { promisify } = await import('util');
             const execFileAsync = promisify(execFile);
-            const { stdout, stderr } = await execFileAsync('sudo', ['-n', 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile']);
-            console.log('✅ Caddy reloaded:', stdout);
-            if (stderr) console.error('Caddy reload stderr:', stderr);
+            await execFileAsync('sudo', ['-n', 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile']);
+            console.log('✅ Caddy reloaded successfully');
         } catch (error) {
             console.error('Failed to reload Caddy:', error);
         }

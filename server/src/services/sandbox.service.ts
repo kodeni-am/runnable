@@ -114,7 +114,7 @@ export class SandboxService {
             // Create directory with proper ownership
             await fs.mkdir(directoryPath, { recursive: true });
             await execFileAsync('sudo', ['-n', 'chown', `${sandboxUser}:${sandboxUser}`, directoryPath]);
-            await execFileAsync('sudo', ['-n', 'chmod', '750', directoryPath]);
+            await execFileAsync('sudo', ['-n', 'chmod', '755', directoryPath]);
 
             // Set resource limits via cgroups (if available)
             try {
