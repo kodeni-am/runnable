@@ -12,7 +12,27 @@ interface ServerConfigOptions {
 }
 
 export class ServerConfigService {
+    // Strict domain validation to prevent config injection
+    private static sanitizeDomain(domain: string): string {
+        // Only allow valid domain characters: alphanumeric, dots, hyphens
+        const sanitized = domain.trim().toLowerCase();
+        if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(sanitized)) {
+            throw new Error(`Invalid domain: ${domain}`);
+        }
+        // Reject domains containing Caddy/Nginx directive characters
+        if (/[{};\n\r"'`\\]/.test(sanitized)) {
+            throw new Error(`Domain contains invalid characters: ${domain}`);
+        }
+        return sanitized;
+    }
+
     static async generateConfig(options: ServerConfigOptions): Promise<string> {
+        // Sanitize all domains before generating config
+        options.subdomain = ServerConfigService.sanitizeDomain(options.subdomain);
+        if (options.customDomains) {
+            options.customDomains = options.customDomains.map(d => ServerConfigService.sanitizeDomain(d));
+        }
+
         switch (options.serverType) {
             case ServerType.CADDY:
             case ServerType.STATIC:

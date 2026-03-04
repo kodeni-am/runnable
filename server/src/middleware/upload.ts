@@ -1,6 +1,7 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { config } from '../config';
 
 const UPLOAD_DIR = './storage/uploads';
@@ -11,12 +12,13 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 
 const storage = multer.diskStorage({
     destination: (_req, _file, cb) => {
-        // Destination is set locally
         cb(null, UPLOAD_DIR);
     },
     filename: (_req, file, cb) => {
-        // Preserve original filename
-        cb(null, file.originalname);
+        // Prefix with UUID to prevent collisions and overwrite attacks
+        const uniquePrefix = crypto.randomUUID();
+        const safeName = path.basename(file.originalname);
+        cb(null, `${uniquePrefix}-${safeName}`);
     },
 });
 

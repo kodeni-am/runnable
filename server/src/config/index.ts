@@ -54,3 +54,21 @@ export const config = {
         userPrefix: process.env.SANDBOX_USER_PREFIX || 'runnable-',
     },
 };
+
+// --- Production safety checks ---
+if (config.nodeEnv === 'production') {
+    const errors: string[] = [];
+    if (!process.env.JWT_SECRET) errors.push('JWT_SECRET must be set in production');
+    if (!process.env.JWT_REFRESH_SECRET) errors.push('JWT_REFRESH_SECRET must be set in production');
+    if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'admin_password_change_me') {
+        errors.push('ADMIN_PASSWORD must be changed in production');
+    }
+    if (!process.env.DATABASE_PASSWORD || process.env.DATABASE_PASSWORD === 'change_me_in_production') {
+        errors.push('DATABASE_PASSWORD must be changed in production');
+    }
+    if (errors.length > 0) {
+        console.error('❌ FATAL: Missing required production configuration:');
+        errors.forEach(e => console.error(`   • ${e}`));
+        process.exit(1);
+    }
+}

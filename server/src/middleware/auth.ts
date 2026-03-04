@@ -19,13 +19,20 @@ export interface JwtPayload {
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        // Read token from HTTP-only cookie first, fall back to Authorization header
+        let token = req.cookies?.accessToken;
+        if (!token) {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                token = authHeader.split(' ')[1];
+            }
+        }
+
+        if (!token) {
             res.status(401).json({ error: 'No token provided' });
             return;
         }
 
-        const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, config.jwt.secret) as JwtPayload;
 
         const userRepo = AppDataSource.getRepository(UserEntity);

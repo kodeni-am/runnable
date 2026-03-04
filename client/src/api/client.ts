@@ -3,15 +3,7 @@ import axios from 'axios';
 const api = axios.create({
     baseURL: '/api',
     headers: { 'Content-Type': 'application/json' },
-});
-
-// Attach token to every request
-api.interceptors.request.use((config) => {
-    const token = localStorage.getItem('accessToken');
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
+    withCredentials: true, // Send cookies with every request
 });
 
 // Auto-refresh on 401
@@ -22,18 +14,12 @@ api.interceptors.response.use(
         if (error.response?.status === 401 && !originalRequest._retry) {
             originalRequest._retry = true;
             try {
-                const refreshToken = localStorage.getItem('refreshToken');
-                if (!refreshToken) throw new Error('No refresh token');
-
-                const { data } = await axios.post('/api/auth/refresh', { refreshToken });
-                localStorage.setItem('accessToken', data.accessToken);
-                localStorage.setItem('refreshToken', data.refreshToken);
-
-                originalRequest.headers.Authorization = `Bearer ${data.accessToken}`;
+                // Server reads refreshToken from cookie and sets new cookies
+                await axios.post('/api/auth/refresh', {}, { withCredentials: true });
+                // Retry the original request (cookies are now refreshed)
                 return api(originalRequest);
             } catch {
-                localStorage.removeItem('accessToken');
-                localStorage.removeItem('refreshToken');
+                // Refresh failed — redirect to login
                 window.location.href = '/login';
             }
         }

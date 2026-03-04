@@ -2,11 +2,29 @@ import { Router, Request, Response, NextFunction } from 'express';
 import passport from 'passport';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import rateLimit from 'express-rate-limit';
 import { AuthService } from '../services/auth.service';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { config } from '../config';
 
 const router = Router();
+
+// Rate limiters to prevent brute-force and flooding
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // 10 attempts per window
+    message: { error: 'Too many attempts, please try again later' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+const refreshLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30, // More generous for token refresh
+    message: { error: 'Too many refresh attempts' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
 
 // --- Passport strategies ---
 if (config.github.clientId) {
@@ -96,10 +114,35 @@ if (config.google.clientId) {
     );
 }
 
+// --- Cookie helper ---
+const isProduction = config.nodeEnv === 'production';
+
+function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
+    res.cookie('accessToken', accessToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000, // 15 min
+        path: '/',
+    });
+    res.cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        path: '/',
+    });
+}
+
+function clearAuthCookies(res: Response) {
+    res.clearCookie('accessToken', { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/' });
+    res.clearCookie('refreshToken', { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/' });
+}
+
 // --- Route handlers ---
 
 // Register
-router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/register', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { email, username, password } = req.body;
         if (!email || !username || !password) {
@@ -107,10 +150,9 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
             return;
         }
         const result = await AuthService.register(email, username, password);
+        setAuthCookies(res, result.accessToken, result.refreshToken);
         res.status(201).json({
             user: { id: result.user.id, email: result.user.email, username: result.user.username, role: result.user.role },
-            accessToken: result.accessToken,
-            refreshToken: result.refreshToken,
         });
     } catch (error) {
         next(error);
@@ -118,7 +160,7 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
 });
 
 // Login
-router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/login', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { email, password } = req.body;
         if (!email || !password) {
@@ -126,29 +168,35 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
             return;
         }
         const result = await AuthService.login(email, password);
+        setAuthCookies(res, result.accessToken, result.refreshToken);
         res.json({
             user: { id: result.user.id, email: result.user.email, username: result.user.username, role: result.user.role },
-            accessToken: result.accessToken,
-            refreshToken: result.refreshToken,
         });
     } catch (error) {
         next(error);
     }
 });
 
-// Refresh token
-router.post('/refresh', async (req: Request, res: Response, next: NextFunction) => {
+// Refresh token (reads refresh token from cookie)
+router.post('/refresh', refreshLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { refreshToken } = req.body;
+        const refreshToken = req.cookies?.refreshToken;
         if (!refreshToken) {
-            res.status(400).json({ error: 'Refresh token is required' });
+            res.status(401).json({ error: 'No refresh token' });
             return;
         }
         const tokens = await AuthService.refreshToken(refreshToken);
-        res.json(tokens);
+        setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+        res.json({ message: 'Tokens refreshed' });
     } catch (error) {
         next(error);
     }
+});
+
+// Logout
+router.post('/logout', (_req: Request, res: Response) => {
+    clearAuthCookies(res);
+    res.json({ message: 'Logged out' });
 });
 
 // Get current user
@@ -159,6 +207,7 @@ router.get('/me', authenticate, (req: AuthRequest, res: Response) => {
         email: user.email,
         username: user.username,
         role: user.role,
+        isApproved: user.isApproved,
         githubId: user.githubId || null,
         googleId: user.googleId || null,
     });
@@ -179,12 +228,23 @@ router.get(
     passport.authenticate('github', { session: false, failureRedirect: '/login' }),
     (req: Request, res: Response) => {
         const result = req.user as any;
-        // Redirect to frontend with tokens in query params
-        const params = new URLSearchParams({
-            accessToken: result.accessToken,
-            refreshToken: result.refreshToken,
+        const clientUrl = process.env.CLIENT_URL || 'http://localhost:5175';
+        const isProduction = process.env.NODE_ENV === 'production';
+        res.cookie('accessToken', result.accessToken, {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: 'lax',
+            maxAge: 15 * 60 * 1000, // 15 min
+            path: '/',
         });
-        res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5175'}/auth/callback?${params}`);
+        res.cookie('refreshToken', result.refreshToken, {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+            path: '/',
+        });
+        res.redirect(`${clientUrl}/auth/callback`);
     }
 );
 
@@ -203,11 +263,23 @@ router.get(
     passport.authenticate('google', { session: false, failureRedirect: '/login' }),
     (req: Request, res: Response) => {
         const result = req.user as any;
-        const params = new URLSearchParams({
-            accessToken: result.accessToken,
-            refreshToken: result.refreshToken,
+        const clientUrl = process.env.CLIENT_URL || 'http://localhost:5175';
+        const isProduction = process.env.NODE_ENV === 'production';
+        res.cookie('accessToken', result.accessToken, {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: 'lax',
+            maxAge: 15 * 60 * 1000,
+            path: '/',
         });
-        res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5175'}/auth/callback?${params}`);
+        res.cookie('refreshToken', result.refreshToken, {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            path: '/',
+        });
+        res.redirect(`${clientUrl}/auth/callback`);
     }
 );
 

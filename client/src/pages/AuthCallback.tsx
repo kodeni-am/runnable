@@ -1,22 +1,17 @@
 import { useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 
 export default function AuthCallback() {
-    const [searchParams] = useSearchParams();
-    const { setTokens, loadUser } = useAuthStore();
+    const { loadUser } = useAuthStore();
     const navigate = useNavigate();
 
     useEffect(() => {
-        const accessToken = searchParams.get('accessToken');
-        const refreshToken = searchParams.get('refreshToken');
-
-        if (accessToken && refreshToken) {
-            setTokens(accessToken, refreshToken);
-            loadUser().then(() => navigate('/'));
-        } else {
-            navigate('/login');
-        }
+        // OAuth callback — cookies are already set by the server redirect
+        // Just load the user and navigate home
+        loadUser()
+            .then(() => navigate('/'))
+            .catch(() => navigate('/login'));
     }, []);
 
     return (

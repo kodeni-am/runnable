@@ -35,10 +35,8 @@ function App() {
 
   useEffect(() => {
     const init = async () => {
-      const token = localStorage.getItem('accessToken');
-      if (token) {
-        await loadUser();
-      }
+      // Cookies are sent automatically — just check if we're logged in
+      await loadUser();
       setInitialized(true);
     };
     init();

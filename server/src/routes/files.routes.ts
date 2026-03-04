@@ -145,6 +145,12 @@ router.put('/:id/files/write', async (req: AuthRequest, res: Response, next: Nex
         if (!filePath) throw new AppError('File path is required', 400);
         if (typeof content !== 'string') throw new AppError('Content must be a string', 400);
 
+        // Limit file write size to 2MB to prevent disk exhaustion
+        const MAX_WRITE_SIZE = 2 * 1024 * 1024;
+        if (Buffer.byteLength(content, 'utf-8') > MAX_WRITE_SIZE) {
+            throw new AppError('File content exceeds maximum size of 2MB', 413);
+        }
+
         await FileManagerService.writeFile(project.directoryPath, filePath, content);
         res.json({ message: 'File saved' });
     } catch (error) {

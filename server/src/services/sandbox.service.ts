@@ -1,4 +1,4 @@
-import { exec, spawn, ChildProcess } from 'child_process';
+import { exec, execFile, spawn, ChildProcess } from 'child_process';
 import fsSync from 'fs';
 import { promisify } from 'util';
 import path from 'path';
@@ -6,6 +6,7 @@ import fs from 'fs/promises';
 import { config } from '../config';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 interface ExecResult {
     stdout: string;
@@ -101,20 +102,20 @@ export class SandboxService {
         const sandboxUser = `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`;
 
         try {
-            // Create dedicated user
-            await execAsync(`sudo -n useradd -r -M -d ${directoryPath} -s /usr/sbin/nologin ${sandboxUser}`);
+            // Create dedicated user (using execFile — no shell, no injection)
+            await execFileAsync('sudo', ['-n', 'useradd', '-r', '-M', '-d', directoryPath, '-s', '/usr/sbin/nologin', sandboxUser]);
 
             // Create directory with proper ownership
             await fs.mkdir(directoryPath, { recursive: true });
-            await execAsync(`sudo -n chown ${sandboxUser}:${sandboxUser} ${directoryPath}`);
-            await execAsync(`sudo -n chmod 750 ${directoryPath}`);
+            await execFileAsync('sudo', ['-n', 'chown', `${sandboxUser}:${sandboxUser}`, directoryPath]);
+            await execFileAsync('sudo', ['-n', 'chmod', '750', directoryPath]);
 
             // Set resource limits via cgroups (if available)
             try {
                 const cgroupDir = `/sys/fs/cgroup/runnable/${sandboxUser}`;
-                await execAsync(`sudo -n mkdir -p ${cgroupDir}`);
-                await execAsync(`echo '512M' | sudo -n tee ${cgroupDir}/memory.max`);
-                await execAsync(`echo '100000 100000' | sudo -n tee ${cgroupDir}/cpu.max`);
+                await execFileAsync('sudo', ['-n', 'mkdir', '-p', cgroupDir]);
+                await execFileAsync('sudo', ['-n', 'tee', `${cgroupDir}/memory.max`], { input: '512M\n' } as any);
+                await execFileAsync('sudo', ['-n', 'tee', `${cgroupDir}/cpu.max`], { input: '100000 100000\n' } as any);
             } catch {
                 console.warn(`Could not set cgroup limits for ${sandboxUser}`);
             }
@@ -131,14 +132,15 @@ export class SandboxService {
         const sandboxUser = `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`;
 
         try {
-            // Kill any processes by this user
-            await execAsync(`sudo -n pkill -u ${sandboxUser}`).catch(() => { });
+            // Kill any processes by this user (using execFile — no shell)
+            await execFileAsync('sudo', ['-n', 'pkill', '-u', sandboxUser]).catch(() => { });
             // Remove user
-            await execAsync(`sudo -n userdel ${sandboxUser}`).catch(() => { });
+            await execFileAsync('sudo', ['-n', 'userdel', sandboxUser]).catch(() => { });
             // Remove cgroup
-            await execAsync(`sudo -n rmdir /sys/fs/cgroup/runnable/${sandboxUser}`).catch(() => { });
+            await execFileAsync('sudo', ['-n', 'rmdir', `/sys/fs/cgroup/runnable/${sandboxUser}`]).catch(() => { });
         } catch (error: any) {
             console.error(`Failed to destroy sandbox for ${projectId}:`, error.message);
         }
     }
 }
+

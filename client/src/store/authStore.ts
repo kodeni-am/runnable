@@ -17,8 +17,7 @@ interface AuthState {
     isLoading: boolean;
     login: (email: string, password: string) => Promise<void>;
     register: (email: string, username: string, password: string) => Promise<void>;
-    logout: () => void;
-    setTokens: (accessToken: string, refreshToken: string) => void;
+    logout: () => Promise<void>;
     loadUser: () => Promise<void>;
 }
 
@@ -31,7 +30,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         set({ isLoading: true });
         try {
             const { data } = await authApi.login({ email, password });
-            localStorage.setItem('accessToken', data.accessToken);
+            // Tokens are set as HTTP-only cookies by the server
             set({ user: data.user as User, isAuthenticated: true, isLoading: false });
         } catch (error) {
             set({ isLoading: false });
@@ -43,7 +42,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         set({ isLoading: true });
         try {
             const { data } = await authApi.register({ email, username, password });
-            localStorage.setItem('accessToken', data.accessToken);
+            // Tokens are set as HTTP-only cookies by the server
             set({ user: data.user as User, isAuthenticated: true, isLoading: false });
         } catch (error) {
             set({ isLoading: false });
@@ -51,25 +50,20 @@ export const useAuthStore = create<AuthState>((set) => ({
         }
     },
 
-    logout: () => {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
+    logout: async () => {
+        try {
+            await authApi.logout();
+        } catch {
+            // Clear state even if server call fails
+        }
         set({ user: null, isAuthenticated: false });
-    },
-
-    setTokens: (accessToken, refreshToken) => {
-        localStorage.setItem('accessToken', accessToken);
-        localStorage.setItem('refreshToken', refreshToken);
-        set({ isAuthenticated: true });
     },
 
     loadUser: async () => {
         try {
             const { data } = await authApi.me();
             set({ user: data as User, isAuthenticated: true });
-        } catch (error) {
-            localStorage.removeItem('accessToken');
-            localStorage.removeItem('refreshToken');
+        } catch {
             set({ user: null, isAuthenticated: false });
         }
     },
