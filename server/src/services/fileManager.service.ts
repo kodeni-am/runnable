@@ -103,4 +103,33 @@ export class FileManagerService {
         const fullPath = FileManagerService.validatePath(baseDir, relativePath);
         await fs.mkdir(fullPath, { recursive: true });
     }
+
+    static async readFile(baseDir: string, relativePath: string): Promise<{ content: string; size: number }> {
+        const fullPath = FileManagerService.validatePath(baseDir, relativePath);
+
+        try {
+            const stat = await fs.stat(fullPath);
+            // Limit file size to 2MB for editor
+            if (stat.size > 2 * 1024 * 1024) {
+                throw new AppError('File too large to edit (max 2MB)', 413);
+            }
+            if (stat.isDirectory()) {
+                throw new AppError('Cannot read a directory', 400);
+            }
+            const content = await fs.readFile(fullPath, 'utf-8');
+            return { content, size: stat.size };
+        } catch (error: any) {
+            if (error instanceof AppError) throw error;
+            if (error.code === 'ENOENT') {
+                throw new AppError('File not found', 404);
+            }
+            throw error;
+        }
+    }
+
+    static async writeFile(baseDir: string, relativePath: string, content: string): Promise<void> {
+        const fullPath = FileManagerService.validatePath(baseDir, relativePath);
+        await fs.mkdir(path.dirname(fullPath), { recursive: true });
+        await fs.writeFile(fullPath, content, 'utf-8');
+    }
 }

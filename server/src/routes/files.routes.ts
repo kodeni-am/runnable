@@ -113,4 +113,63 @@ router.post('/:id/files/mkdir', async (req: AuthRequest, res: Response, next: Ne
     }
 });
 
+// Read file content (for editor)
+router.get('/:id/files/read', async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const project = await projectRepo.findOne({
+            where: { id: req.params.id as string, userId: req.user!.id },
+        });
+        if (!project) throw new AppError('Project not found', 404);
+
+        const filePath = req.query.path as string;
+        if (!filePath) throw new AppError('File path is required', 400);
+
+        const { content, size } = await FileManagerService.readFile(project.directoryPath, filePath);
+        res.json({ content, size });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Save file content (from editor)
+router.put('/:id/files/write', async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const project = await projectRepo.findOne({
+            where: { id: req.params.id as string, userId: req.user!.id },
+        });
+        if (!project) throw new AppError('Project not found', 404);
+
+        const { path: filePath, content } = req.body;
+        if (!filePath) throw new AppError('File path is required', 400);
+        if (typeof content !== 'string') throw new AppError('Content must be a string', 400);
+
+        await FileManagerService.writeFile(project.directoryPath, filePath, content);
+        res.json({ message: 'File saved' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Create new file
+router.post('/:id/files/create', async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const project = await projectRepo.findOne({
+            where: { id: req.params.id as string, userId: req.user!.id },
+        });
+        if (!project) throw new AppError('Project not found', 404);
+
+        const { path: filePath, content } = req.body;
+        if (!filePath) throw new AppError('File path is required', 400);
+
+        await FileManagerService.writeFile(project.directoryPath, filePath, content || '');
+        res.json({ message: 'File created' });
+    } catch (error) {
+        next(error);
+    }
+});
+
 export default router;
+

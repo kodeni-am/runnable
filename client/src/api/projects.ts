@@ -73,4 +73,7 @@ export const projectsApi = {
         }),
     deleteFile: (id: string, path: string) => api.delete(`/projects/${id}/files`, { params: { path } }),
     createDir: (id: string, path: string) => api.post(`/projects/${id}/files/mkdir`, { path }),
+    readFile: (id: string, path: string) => api.get<{ content: string; size: number }>(`/projects/${id}/files/read`, { params: { path } }),
+    writeFile: (id: string, path: string, content: string) => api.put(`/projects/${id}/files/write`, { path, content }),
+    createFile: (id: string, path: string, content?: string) => api.post(`/projects/${id}/files/create`, { path, content }),
 };
