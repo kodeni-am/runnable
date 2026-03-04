@@ -35,6 +35,65 @@ Once your `.env` variables are configured, stop and restart the Runnable backend
 
 ---
 
+## Setting up Google OAuth
+
+To allow users to log in with their Google account, you need to create a Google OAuth 2.0 application in the Google Cloud Console.
+
+### Step 1: Create a Google Cloud Project
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Click the project dropdown at the top of the page and select **New Project**.
+3. Give your project a name (e.g., "Runnable") and click **Create**.
+4. Make sure the new project is selected in the project dropdown.
+
+### Step 2: Configure the OAuth Consent Screen
+1. In the left sidebar, navigate to **APIs & Services → OAuth consent screen**.
+2. Select **External** as the user type (unless you have a Google Workspace org and want to restrict to internal users), then click **Create**.
+3. Fill in the required fields:
+   - **App name**: e.g., "Runnable"
+   - **User support email**: your email address
+   - **Developer contact information**: your email address
+4. Click **Save and Continue**.
+5. On the **Scopes** page, click **Add or Remove Scopes** and add:
+   - `email`
+   - `profile`
+   - `openid`
+6. Click **Save and Continue** through the remaining steps.
+
+### Step 3: Create OAuth 2.0 Credentials
+1. In the left sidebar, navigate to **APIs & Services → Credentials**.
+2. Click **+ Create Credentials → OAuth client ID**.
+3. Select **Web application** as the application type.
+4. Give it a name (e.g., "Runnable Web Client").
+5. Under **Authorized JavaScript origins**, add:
+   - `http://localhost:5175` (for local development)
+   - `https://yourdomain.com` (for production)
+6. Under **Authorized redirect URIs**, add:
+   - `http://localhost:3001/api/auth/google/callback` (for local development)
+   - `https://api.yourdomain.com/api/auth/google/callback` (for production)
+7. Click **Create**.
+
+### Step 4: Configure Environment Variables
+1. After creating the credentials, a dialog will show your **Client ID** and **Client Secret**.
+2. Copy these values into your `.env` file:
+
+```env
+GOOGLE_CLIENT_ID=your_google_client_id_here
+GOOGLE_CLIENT_SECRET=your_google_client_secret_here
+GOOGLE_CALLBACK_URL=http://localhost:3001/api/auth/google/callback
+```
+
+For production, update `GOOGLE_CALLBACK_URL` to match your domain:
+```env
+GOOGLE_CALLBACK_URL=https://api.yourdomain.com/api/auth/google/callback
+```
+
+### Step 5: Restart the Server
+Stop and restart the Runnable backend server so that the Passport.js Google OAuth strategy registers the new credentials. Users will now see a **Google** login button on the Login and Register pages.
+
+> **Note**: If you are in development/testing mode and haven't published your OAuth consent screen, only test users you explicitly add in the Google Cloud Console will be able to log in. To add test users, go to **APIs & Services → OAuth consent screen → Test users**.
+
+---
+
 ## Server Deployment (Ubuntu)
 
 Runnable includes a one-command setup script that installs and configures everything on a fresh Ubuntu server.
@@ -101,7 +160,14 @@ Before running the script (or immediately after), point these DNS records to you
    sudo systemctl restart runnable
    ```
 
-3. **Access the dashboard** — open `https://yourdomain.com` in your browser and log in with the admin credentials shown after setup.
+3. **Configure Google OAuth** (optional) — follow the [Google OAuth](#setting-up-google-oauth) section above, then update the `.env`:
+   ```bash
+   sudo nano /opt/runnable/.env
+   # Fill in GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+   sudo systemctl restart runnable
+   ```
+
+4. **Access the dashboard** — open `https://yourdomain.com` in your browser and log in with the admin credentials shown after setup.
 
 ### Management Commands
 

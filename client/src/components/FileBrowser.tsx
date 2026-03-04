@@ -318,7 +318,7 @@ export default function FileBrowser({ projectId, readOnly = false }: { projectId
                                     <div className="info-card-value" style={{ fontSize: 12 }}>{new Date(selectedFile.modifiedAt).toLocaleString()}</div>
                                 </div>
                             </div>
-                            {currentProject && (
+                            {currentProject && currentProject.serverType === 'static' && (
                                 <div className="info-card glass" style={{ padding: 16 }}>
                                     <div className="info-card-label">Public URL</div>
                                     <div className="info-card-value" style={{ wordBreak: 'break-all', fontSize: 13 }}>
