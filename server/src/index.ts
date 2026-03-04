@@ -28,11 +28,11 @@ async function bootstrap() {
         await AppDataSource.initialize();
         console.log('✅ Database connected');
 
-        // Seed default admin
+        // Seed or update default admin
         const userRepo = AppDataSource.getRepository(User);
         const existingAdmin = await userRepo.findOne({ where: { role: Role.ADMIN } });
+        const passwordHash = await bcrypt.hash(config.admin.password, 12);
         if (!existingAdmin) {
-            const passwordHash = await bcrypt.hash(config.admin.password, 12);
             const adminUser = userRepo.create({
                 email: config.admin.email,
                 username: config.admin.username,
@@ -42,6 +42,13 @@ async function bootstrap() {
             });
             await userRepo.save(adminUser);
             console.log(`✅ Default admin account created: ${config.admin.email}`);
+        } else {
+            // Sync admin credentials with .env on re-deploy
+            existingAdmin.email = config.admin.email;
+            existingAdmin.username = config.admin.username;
+            existingAdmin.passwordHash = passwordHash;
+            await userRepo.save(existingAdmin);
+            console.log(`✅ Admin account synced: ${config.admin.email}`);
         }
     } catch (error) {
         console.error('❌ Database connection failed:', error);

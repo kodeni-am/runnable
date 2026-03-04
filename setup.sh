@@ -116,10 +116,14 @@ systemctl enable postgresql
 systemctl start postgresql
 ok "PostgreSQL 16 installed"
 
-# Create database and user
+# Create database and user (always sync password on re-runs)
 log "Configuring PostgreSQL database..."
-sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='runnable'" | grep -q 1 || \
+if sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='runnable'" | grep -q 1; then
+    # User exists — update password to match the new .env
+    sudo -u postgres psql -c "ALTER USER runnable WITH PASSWORD '${DB_PASSWORD}';"
+else
     sudo -u postgres psql -c "CREATE USER runnable WITH PASSWORD '${DB_PASSWORD}';"
+fi
 sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='runnable'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE DATABASE runnable OWNER runnable;"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE runnable TO runnable;" 2>/dev/null || true
