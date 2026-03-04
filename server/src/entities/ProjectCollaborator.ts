@@ -16,6 +16,10 @@ export interface ProjectPermissions {
     canEditFiles: boolean;
     canDelete: boolean;
     canViewLogs: boolean;
+    canViewFiles: boolean;
+    canViewDomains: boolean;
+    canViewGithub: boolean;
+    canViewSettings: boolean;
 }
 
 export const DEFAULT_PROJECT_PERMISSIONS: ProjectPermissions = {
@@ -25,6 +29,10 @@ export const DEFAULT_PROJECT_PERMISSIONS: ProjectPermissions = {
     canEditFiles: false,
     canDelete: false,
     canViewLogs: true,
+    canViewFiles: true,
+    canViewDomains: true,
+    canViewGithub: true,
+    canViewSettings: true,
 };
 
 @Entity('project_collaborators')

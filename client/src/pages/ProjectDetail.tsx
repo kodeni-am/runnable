@@ -20,6 +20,10 @@ const DEFAULT_COLLAB_PERMS: ProjectPermissions = {
     canEditFiles: false,
     canDelete: false,
     canViewLogs: true,
+    canViewFiles: true,
+    canViewDomains: true,
+    canViewGithub: true,
+    canViewSettings: true,
 };
 
 export default function ProjectDetail() {
@@ -81,6 +85,10 @@ export default function ProjectDetail() {
     const canEditFiles = isOwner || isAdmin || collabPermissions.canEditFiles;
     const canDelete = isOwner || isAdmin || collabPermissions.canDelete;
     const canViewLogs = isOwner || isAdmin || collabPermissions.canViewLogs;
+    const canViewFiles = isOwner || isAdmin || collabPermissions.canViewFiles;
+    const canViewDomains = isOwner || isAdmin || collabPermissions.canViewDomains;
+    const canViewGithub = isOwner || isAdmin || collabPermissions.canViewGithub;
+    const canViewSettings = isOwner || isAdmin || collabPermissions.canViewSettings;
     const canManageCollaborators = isOwner || isAdmin;
 
     useEffect(() => {
@@ -295,11 +303,11 @@ export default function ProjectDetail() {
 
     // Build tabs list based on permissions
     const availableTabs: typeof tab[] = ['overview'];
-    if (canEditFiles) availableTabs.push('files');
-    availableTabs.push('github');
-    if (canEditDomains) availableTabs.push('domains');
+    if (canViewFiles || canEditFiles) availableTabs.push('files');
+    if (canViewGithub) availableTabs.push('github');
+    if (canViewDomains || canEditDomains) availableTabs.push('domains');
     if (canViewLogs) availableTabs.push('logs');
-    if (canEditConfig) availableTabs.push('settings');
+    if (canViewSettings || canEditConfig) availableTabs.push('settings');
     if (canManageCollaborators) availableTabs.push('collaborators');
 
     return (
@@ -398,7 +406,7 @@ export default function ProjectDetail() {
                 )}
 
                 {/* FILES TAB */}
-                {tab === 'files' && <FileBrowser projectId={p.id} />}
+                {tab === 'files' && <FileBrowser projectId={p.id} readOnly={!canEditFiles} />}
 
                 {/* GITHUB TAB */}
                 {tab === 'github' && (
@@ -589,7 +597,7 @@ export default function ProjectDetail() {
                 {tab === 'logs' && <LogViewer projectId={p.id} />}
 
                 {/* SETTINGS TAB */}
-                {tab === 'settings' && canEditConfig && (
+                {tab === 'settings' && (canEditConfig || canViewSettings) && (
                     <div className="settings-section glass">
                         <div style={{ maxWidth: 700 }}>
                             <h3 style={{ marginBottom: 20 }}>Project Configuration</h3>
@@ -601,6 +609,7 @@ export default function ProjectDetail() {
                                     placeholder="e.g. npm run build && npx tsc"
                                     value={buildCommand}
                                     onChange={(e) => setBuildCommand(e.target.value)}
+                                    disabled={!canEditConfig}
                                 />
                                 <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
                                     Executed in the project root before Railpack packaging.
@@ -614,6 +623,7 @@ export default function ProjectDetail() {
                                     placeholder="e.g. npx tsx server/index.ts"
                                     value={startCommand}
                                     onChange={(e) => setStartCommand(e.target.value)}
+                                    disabled={!canEditConfig}
                                 />
                                 <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
                                     Override the default container start behavior.
@@ -623,9 +633,11 @@ export default function ProjectDetail() {
                             <div className="form-group">
                                 <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     Environment Variables
-                                    <button className="btn btn-secondary" onClick={addEnvVar} style={{ padding: '4px 8px', fontSize: 12 }}>
-                                        <Plus size={14} /> Add Variable
-                                    </button>
+                                    {canEditConfig && (
+                                        <button className="btn btn-secondary" onClick={addEnvVar} style={{ padding: '4px 8px', fontSize: 12 }}>
+                                            <Plus size={14} /> Add Variable
+                                        </button>
+                                    )}
                                 </label>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
                                     {envVars.map((env, index) => (
@@ -636,6 +648,7 @@ export default function ProjectDetail() {
                                                 placeholder="KEY"
                                                 value={env.key}
                                                 onChange={(e) => updateEnvVar(index, 'key', e.target.value)}
+                                                disabled={!canEditConfig}
                                             />
                                             <input
                                                 className="form-input"
@@ -643,45 +656,52 @@ export default function ProjectDetail() {
                                                 placeholder="VALUE"
                                                 value={env.value}
                                                 onChange={(e) => updateEnvVar(index, 'value', e.target.value)}
+                                                disabled={!canEditConfig}
                                             />
-                                            <button className="btn btn-danger" onClick={() => removeEnvVar(index)} style={{ padding: 8 }}>
-                                                <XCircle size={16} />
-                                            </button>
+                                            {canEditConfig && (
+                                                <button className="btn btn-danger" onClick={() => removeEnvVar(index)} style={{ padding: 8 }}>
+                                                    <XCircle size={16} />
+                                                </button>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
                             </div>
 
-                            <div style={{ marginTop: 30, display: 'flex', alignItems: 'center', gap: 16 }}>
-                                <button className="btn btn-primary" onClick={handleSaveSettings} disabled={saveLoading}>
-                                    {saveLoading ? <span className="spinner" /> : 'Save Settings'}
-                                </button>
-                                {saveSuccess && (
-                                    <span style={{ color: 'var(--status-running)', display: 'flex', alignItems: 'center', gap: 4, fontSize: 14 }}>
-                                        <CheckCircle2 size={16} /> Saved Successfully
-                                    </span>
-                                )}
-                            </div>
+                            {canEditConfig && (
+                                <div style={{ marginTop: 30, display: 'flex', alignItems: 'center', gap: 16 }}>
+                                    <button className="btn btn-primary" onClick={handleSaveSettings} disabled={saveLoading}>
+                                        {saveLoading ? <span className="spinner" /> : 'Save Settings'}
+                                    </button>
+                                    {saveSuccess && (
+                                        <span style={{ color: 'var(--status-running)', display: 'flex', alignItems: 'center', gap: 4, fontSize: 14 }}>
+                                            <CheckCircle2 size={16} /> Saved Successfully
+                                        </span>
+                                    )}
+                                </div>
+                            )}
 
-                            <div style={{ marginTop: 40, paddingTop: 30, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                                <h3 style={{ marginBottom: 10 }}>Advanced Server Controls</h3>
-                                <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
-                                    If your project is not accessible via its subdomain, you can force the system to regenerate its proxy configuration.
-                                </p>
-                                <button
-                                    className="btn btn-secondary"
-                                    onClick={async () => {
-                                        try {
-                                            await projectsApi.reloadProxy(p.id);
-                                            alert('Proxy configuration regenerated and Caddy reloaded successfully.');
-                                        } catch (err: any) {
-                                            alert(err.response?.data?.error || 'Failed to reload proxy configuration.');
-                                        }
-                                    }}
-                                >
-                                    <Globe size={16} /> Regenerate Proxy Config
-                                </button>
-                            </div>
+                            {canEditConfig && (
+                                <div style={{ marginTop: 40, paddingTop: 30, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                                    <h3 style={{ marginBottom: 10 }}>Advanced Server Controls</h3>
+                                    <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+                                        If your project is not accessible via its subdomain, you can force the system to regenerate its proxy configuration.
+                                    </p>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={async () => {
+                                            try {
+                                                await projectsApi.reloadProxy(p.id);
+                                                alert('Proxy configuration regenerated and Caddy reloaded successfully.');
+                                            } catch (err: any) {
+                                                alert(err.response?.data?.error || 'Failed to reload proxy configuration.');
+                                            }
+                                        }}
+                                    >
+                                        <Globe size={16} /> Regenerate Proxy Config
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
@@ -772,12 +792,18 @@ export default function ProjectDetail() {
                                     <div className="form-group">
                                         <label>Permissions</label>
                                         <div style={{ marginTop: 8 }}>
+                                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>View Access</p>
+                                            <PermCheckbox label="Can View Files" checked={collabPerms.canViewFiles} onChange={(v) => setCollabPerms({ ...collabPerms, canViewFiles: v })} />
+                                            <PermCheckbox label="Can View Domains" checked={collabPerms.canViewDomains} onChange={(v) => setCollabPerms({ ...collabPerms, canViewDomains: v })} />
+                                            <PermCheckbox label="Can View GitHub" checked={collabPerms.canViewGithub} onChange={(v) => setCollabPerms({ ...collabPerms, canViewGithub: v })} />
+                                            <PermCheckbox label="Can View Settings" checked={collabPerms.canViewSettings} onChange={(v) => setCollabPerms({ ...collabPerms, canViewSettings: v })} />
+                                            <PermCheckbox label="Can View Logs" checked={collabPerms.canViewLogs} onChange={(v) => setCollabPerms({ ...collabPerms, canViewLogs: v })} />
+                                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, marginTop: 12, fontWeight: 600 }}>Edit Access</p>
                                             <PermCheckbox label="Can Start/Stop/Restart" checked={collabPerms.canStart} onChange={(v) => setCollabPerms({ ...collabPerms, canStart: v })} />
                                             <PermCheckbox label="Can Edit Config" checked={collabPerms.canEditConfig} onChange={(v) => setCollabPerms({ ...collabPerms, canEditConfig: v })} />
                                             <PermCheckbox label="Can Edit Domains" checked={collabPerms.canEditDomains} onChange={(v) => setCollabPerms({ ...collabPerms, canEditDomains: v })} />
                                             <PermCheckbox label="Can Edit Files" checked={collabPerms.canEditFiles} onChange={(v) => setCollabPerms({ ...collabPerms, canEditFiles: v })} />
                                             <PermCheckbox label="Can Delete Project" checked={collabPerms.canDelete} onChange={(v) => setCollabPerms({ ...collabPerms, canDelete: v })} />
-                                            <PermCheckbox label="Can View Logs" checked={collabPerms.canViewLogs} onChange={(v) => setCollabPerms({ ...collabPerms, canViewLogs: v })} />
                                         </div>
                                     </div>
                                     <div className="modal-actions">
@@ -796,12 +822,18 @@ export default function ProjectDetail() {
                                     {collabError && <div className="alert alert-error">{collabError}</div>}
                                     <div className="form-group">
                                         <div style={{ marginTop: 8 }}>
+                                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>View Access</p>
+                                            <PermCheckbox label="Can View Files" checked={editCollabPerms.canViewFiles} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canViewFiles: v })} />
+                                            <PermCheckbox label="Can View Domains" checked={editCollabPerms.canViewDomains} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canViewDomains: v })} />
+                                            <PermCheckbox label="Can View GitHub" checked={editCollabPerms.canViewGithub} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canViewGithub: v })} />
+                                            <PermCheckbox label="Can View Settings" checked={editCollabPerms.canViewSettings} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canViewSettings: v })} />
+                                            <PermCheckbox label="Can View Logs" checked={editCollabPerms.canViewLogs} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canViewLogs: v })} />
+                                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, marginTop: 12, fontWeight: 600 }}>Edit Access</p>
                                             <PermCheckbox label="Can Start/Stop/Restart" checked={editCollabPerms.canStart} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canStart: v })} />
                                             <PermCheckbox label="Can Edit Config" checked={editCollabPerms.canEditConfig} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canEditConfig: v })} />
                                             <PermCheckbox label="Can Edit Domains" checked={editCollabPerms.canEditDomains} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canEditDomains: v })} />
                                             <PermCheckbox label="Can Edit Files" checked={editCollabPerms.canEditFiles} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canEditFiles: v })} />
                                             <PermCheckbox label="Can Delete Project" checked={editCollabPerms.canDelete} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canDelete: v })} />
-                                            <PermCheckbox label="Can View Logs" checked={editCollabPerms.canViewLogs} onChange={(v) => setEditCollabPerms({ ...editCollabPerms, canViewLogs: v })} />
                                         </div>
                                     </div>
                                     <div className="modal-actions">

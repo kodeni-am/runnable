@@ -7,6 +7,10 @@ export interface ProjectPermissions {
     canEditFiles: boolean;
     canDelete: boolean;
     canViewLogs: boolean;
+    canViewFiles: boolean;
+    canViewDomains: boolean;
+    canViewGithub: boolean;
+    canViewSettings: boolean;
 }
 
 export interface Collaborator {

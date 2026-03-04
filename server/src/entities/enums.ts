@@ -26,4 +26,8 @@ export enum ProjectPermission {
     CAN_EDIT_FILES = 'canEditFiles',
     CAN_DELETE = 'canDelete',
     CAN_VIEW_LOGS = 'canViewLogs',
+    CAN_VIEW_FILES = 'canViewFiles',
+    CAN_VIEW_DOMAINS = 'canViewDomains',
+    CAN_VIEW_GITHUB = 'canViewGithub',
+    CAN_VIEW_SETTINGS = 'canViewSettings',
 }

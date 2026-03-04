@@ -52,9 +52,10 @@ interface CodeEditorProps {
     onSaved?: () => void;
     isNewFile?: boolean;
     currentDir?: string;
+    readOnly?: boolean;
 }
 
-export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNewFile, currentDir }: CodeEditorProps) {
+export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNewFile, currentDir, readOnly }: CodeEditorProps) {
     const editorRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const [loading, setLoading] = useState(true);
@@ -127,6 +128,7 @@ export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNe
                 syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
                 oneDark,
                 getLanguageExtension(filename),
+                ...(readOnly ? [EditorState.readOnly.of(true)] : []),
                 keymap.of([
                     ...defaultKeymap,
                     ...historyKeymap,
@@ -254,8 +256,8 @@ export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNe
                     <button
                         className="btn btn-primary"
                         onClick={handleSave}
-                        disabled={saving || (!modified && !isNewFile) || (isNewFile && !newFileName.trim())}
-                        style={{ padding: '6px 16px', fontSize: 13, gap: 6 }}
+                        disabled={saving || readOnly || (!modified && !isNewFile) || (isNewFile && !newFileName.trim())}
+                        style={{ padding: '6px 16px', fontSize: 13, gap: 6, ...(readOnly ? { display: 'none' } : {}) }}
                     >
                         <Save size={14} />
                         {saving ? 'Saving...' : 'Save'}

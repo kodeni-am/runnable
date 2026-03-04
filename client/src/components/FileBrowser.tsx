@@ -47,7 +47,7 @@ function isTextFile(filename: string): boolean {
         || basename === 'caddyfile';
 }
 
-export default function FileBrowser({ projectId }: { projectId: string }) {
+export default function FileBrowser({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
     const { currentProject } = useProjectStore();
     const [files, setFiles] = useState<FileInfo[]>([]);
     const [currentPath, setCurrentPath] = useState('');
@@ -177,6 +177,7 @@ export default function FileBrowser({ projectId }: { projectId: string }) {
                     filePath={editingFile}
                     isNewFile={creatingNewFile}
                     currentDir={currentPath}
+                    readOnly={readOnly}
                     onClose={() => {
                         setEditingFile(null);
                         setCreatingNewFile(false);
@@ -206,15 +207,19 @@ export default function FileBrowser({ projectId }: { projectId: string }) {
                                 ))}
                             </div>
                             <div style={{ display: 'flex', gap: 8 }}>
-                                <button className="btn btn-secondary" onClick={handleNewFile} style={{ fontSize: 13, padding: '6px 14px' }}>
-                                    <FilePlus size={14} /> New File
-                                </button>
-                                <button className="btn btn-secondary" onClick={() => setShowNewFolderModal(true)} style={{ fontSize: 13, padding: '6px 14px' }}>
-                                    <FolderPlus size={14} /> New Folder
-                                </button>
-                                <button className="btn btn-secondary" onClick={() => fileInputRef.current?.click()} style={{ fontSize: 13, padding: '6px 14px' }}>
-                                    <Upload size={14} /> Upload
-                                </button>
+                                {!readOnly && (
+                                    <>
+                                        <button className="btn btn-secondary" onClick={handleNewFile} style={{ fontSize: 13, padding: '6px 14px' }}>
+                                            <FilePlus size={14} /> New File
+                                        </button>
+                                        <button className="btn btn-secondary" onClick={() => setShowNewFolderModal(true)} style={{ fontSize: 13, padding: '6px 14px' }}>
+                                            <FolderPlus size={14} /> New Folder
+                                        </button>
+                                        <button className="btn btn-secondary" onClick={() => fileInputRef.current?.click()} style={{ fontSize: 13, padding: '6px 14px' }}>
+                                            <Upload size={14} /> Upload
+                                        </button>
+                                    </>
+                                )}
                             </div>
                             <input
                                 ref={fileInputRef}
@@ -249,7 +254,7 @@ export default function FileBrowser({ projectId }: { projectId: string }) {
                                         <span className="file-date">{new Date(file.modifiedAt).toLocaleDateString()}</span>
                                         <div className="file-actions">
                                             {!file.isDirectory && isTextFile(file.name) && (
-                                                <button className="btn-icon" onClick={(e) => handleEdit(e, file)} title="Edit" style={{ color: 'var(--accent)' }}>
+                                                <button className="btn-icon" onClick={(e) => handleEdit(e, file)} title={readOnly ? 'View' : 'Edit'} style={{ color: 'var(--accent)' }}>
                                                     <Pencil size={16} />
                                                 </button>
                                             )}
@@ -258,9 +263,11 @@ export default function FileBrowser({ projectId }: { projectId: string }) {
                                                     <Download size={16} />
                                                 </button>
                                             )}
-                                            <button className="btn-icon" onClick={(e) => handleDelete(e, file)} title="Delete" style={{ color: 'var(--status-error)' }}>
-                                                <Trash2 size={16} />
-                                            </button>
+                                            {!readOnly && (
+                                                <button className="btn-icon" onClick={(e) => handleDelete(e, file)} title="Delete" style={{ color: 'var(--status-error)' }}>
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            )}
                                         </div>
                                     </li>
                                 ))}
@@ -270,10 +277,11 @@ export default function FileBrowser({ projectId }: { projectId: string }) {
 
                     <div
                         className={`drop-zone ${dragOver ? 'drag-over' : ''}`}
-                        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                        onDragOver={(e) => { if (!readOnly) { e.preventDefault(); setDragOver(true); } }}
                         onDragLeave={() => setDragOver(false)}
-                        onDrop={handleDrop}
-                        onClick={() => fileInputRef.current?.click()}
+                        onDrop={readOnly ? undefined : handleDrop}
+                        onClick={readOnly ? undefined : () => fileInputRef.current?.click()}
+                        style={readOnly ? { display: 'none' } : {}}
                     >
                         <Upload size={32} style={{ color: 'var(--text-muted)', marginBottom: 12 }} />
                         <p style={{ color: 'var(--text-secondary)' }}>Drag & drop files here or click to upload</p>
@@ -328,18 +336,20 @@ export default function FileBrowser({ projectId }: { projectId: string }) {
                                     setEditingFile(selectedFile.path);
                                     setCreatingNewFile(false);
                                 }}>
-                                    <Pencil size={16} /> Edit
+                                    <Pencil size={16} /> {readOnly ? 'View' : 'Edit'}
                                 </button>
                             )}
                             <button className="btn btn-secondary" style={{ flex: 1, padding: '10px', fontSize: 13 }} onClick={() => handleDownload(new MouseEvent('click') as any, selectedFile)}>
                                 <Download size={16} /> Download
                             </button>
-                            <button className="btn btn-danger" style={{ flex: 1, padding: '10px', fontSize: 13 }} onClick={() => {
-                                handleDelete(new MouseEvent('click') as any, selectedFile);
-                                setSelectedFile(null);
-                            }}>
-                                <Trash2 size={16} /> Delete
-                            </button>
+                            {!readOnly && (
+                                <button className="btn btn-danger" style={{ flex: 1, padding: '10px', fontSize: 13 }} onClick={() => {
+                                    handleDelete(new MouseEvent('click') as any, selectedFile);
+                                    setSelectedFile(null);
+                                }}>
+                                    <Trash2 size={16} /> Delete
+                                </button>
+                            )}
                         </div>
                     </div>
                 )}
