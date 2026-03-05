@@ -55,6 +55,24 @@ export class Project {
     @Column({ type: 'simple-json', nullable: true })
     envVars?: Record<string, string>;
 
+    /** True when this APP project should be managed with docker compose */
+    @Column({ default: false })
+    useCompose: boolean;
+
+    /**
+     * Path to the compose file relative to `directoryPath`.
+     * Defaults to `docker-compose.yml` when `useCompose` is true.
+     */
+    @Column({ nullable: true })
+    composeFile?: string;
+
+    /**
+     * The compose service whose published port Runnable will proxy.
+     * Required when `useCompose` is true.
+     */
+    @Column({ nullable: true })
+    composeService?: string;
+
     @ManyToOne(() => User, (user) => user.projects, { onDelete: 'CASCADE' })
     user: User;
 

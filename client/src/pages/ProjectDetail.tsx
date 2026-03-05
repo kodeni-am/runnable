@@ -62,6 +62,10 @@ export default function ProjectDetail() {
     const [envVars, setEnvVars] = useState<{ key: string, value: string }[]>([]);
     const [saveLoading, setSaveLoading] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
+    // Compose settings state
+    const [useCompose, setUseCompose] = useState(false);
+    const [composeFile, setComposeFile] = useState('docker-compose.yml');
+    const [composeService, setComposeService] = useState('');
 
     // Collaborator state
     const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -100,6 +104,9 @@ export default function ProjectDetail() {
                     setStartCommand(p.startCommand || '');
                     const envs = Object.entries(p.envVars || {}).map(([key, value]) => ({ key, value: String(value) }));
                     setEnvVars(envs.length > 0 ? envs : [{ key: '', value: '' }]);
+                    setUseCompose(p.useCompose || false);
+                    setComposeFile(p.composeFile || 'docker-compose.yml');
+                    setComposeService(p.composeService || '');
                 }
             });
         }
@@ -229,7 +236,10 @@ export default function ProjectDetail() {
             await projectsApi.update(id, {
                 buildCommand,
                 startCommand,
-                envVars: envObj
+                envVars: envObj,
+                useCompose,
+                composeFile: composeFile || 'docker-compose.yml',
+                composeService,
             });
             await fetchProject(id);
             setSaveSuccess(true);
@@ -629,6 +639,58 @@ export default function ProjectDetail() {
                                     Override the default container start behavior.
                                 </p>
                             </div>
+
+                            {/* ── COMPOSE SETTINGS (APP projects only) ─────────────── */}
+                            {p.serverType === 'app' && (
+                                <div style={{ marginTop: 24, padding: '16px 20px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                                        <label style={{ fontWeight: 600, fontSize: 14, margin: 0 }}>Docker Compose Mode</label>
+                                        <input
+                                            type="checkbox"
+                                            checked={useCompose}
+                                            onChange={(e) => setUseCompose(e.target.checked)}
+                                            disabled={!canEditConfig}
+                                            style={{ width: 16, height: 16, cursor: canEditConfig ? 'pointer' : 'default' }}
+                                        />
+                                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                            Enable to deploy with <code>docker compose</code> instead of Railpack
+                                        </span>
+                                    </div>
+
+                                    {useCompose && (
+                                        <>
+                                            <div className="form-group" style={{ marginBottom: 12 }}>
+                                                <label style={{ fontSize: 13 }}>Compose File</label>
+                                                <input
+                                                    className="form-input"
+                                                    placeholder="docker-compose.yml"
+                                                    value={composeFile}
+                                                    onChange={(e) => setComposeFile(e.target.value)}
+                                                    disabled={!canEditConfig}
+                                                />
+                                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                    Path to the compose file, relative to the project root.
+                                                </p>
+                                            </div>
+                                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                                <label style={{ fontSize: 13 }}>
+                                                    Primary Service <span style={{ color: 'var(--status-error)' }}>*</span>
+                                                </label>
+                                                <input
+                                                    className="form-input"
+                                                    placeholder="e.g. web, api, app"
+                                                    value={composeService}
+                                                    onChange={(e) => setComposeService(e.target.value)}
+                                                    disabled={!canEditConfig}
+                                                />
+                                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                    The service name whose published port Runnable will proxy (must match a service key in the compose file).
+                                                </p>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
 
                             <div className="form-group">
                                 <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

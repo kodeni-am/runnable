@@ -7,6 +7,10 @@ export interface ProjectDetection {
     startCommand?: string;
     defaultPort: number;
     hasDockerfile: boolean;
+    /** True when a docker-compose file was found */
+    useCompose: boolean;
+    /** Relative path to the compose file, e.g. `docker-compose.yml` */
+    composeFile?: string;
 }
 
 export class DetectService {
@@ -19,26 +23,45 @@ export class DetectService {
         const files = await fs.readdir(directoryPath).catch(() => []);
         const fileSet = new Set(files);
 
-        // 1. Dockerfile present → let Docker handle everything
+        // 1. docker-compose file present → compose-based deployment
+        const COMPOSE_FILE_NAMES = [
+            'docker-compose.yml',
+            'docker-compose.yaml',
+            'compose.yml',
+            'compose.yaml',
+        ];
+        const foundComposeFile = COMPOSE_FILE_NAMES.find(f => fileSet.has(f));
+        if (foundComposeFile) {
+            return {
+                runtime: 'unknown',
+                defaultPort: 8080,
+                hasDockerfile: fileSet.has('Dockerfile') || fileSet.has('dockerfile'),
+                useCompose: true,
+                composeFile: foundComposeFile,
+            };
+        }
+
+        // 2. Dockerfile present (no compose) → let Docker handle everything
         if (fileSet.has('Dockerfile') || fileSet.has('dockerfile')) {
             return {
                 runtime: 'unknown',
                 defaultPort: 8080,
                 hasDockerfile: true,
+                useCompose: false,
             };
         }
 
-        // 2. Node.js (package.json)
+        // 3. Node.js (package.json)
         if (fileSet.has('package.json')) {
             return DetectService.detectNode(directoryPath);
         }
 
-        // 3. Python
+        // 4. Python
         if (fileSet.has('requirements.txt') || fileSet.has('Pipfile') || fileSet.has('pyproject.toml')) {
             return DetectService.detectPython(directoryPath, fileSet);
         }
 
-        // 4. Go
+        // 5. Go
         if (fileSet.has('go.mod')) {
             return {
                 runtime: 'go',
@@ -46,10 +69,11 @@ export class DetectService {
                 startCommand: './app',
                 defaultPort: 8080,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
-        // 5. .NET (*.csproj or *.sln)
+        // 6. .NET (*.csproj or *.sln)
         const hasDotnet = files.some(f => f.endsWith('.csproj') || f.endsWith('.sln'));
         if (hasDotnet) {
             return {
@@ -58,10 +82,11 @@ export class DetectService {
                 startCommand: 'dotnet out/*.dll',
                 defaultPort: 5000,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
-        // 6. PHP (composer.json)
+        // 7. PHP (composer.json)
         if (fileSet.has('composer.json')) {
             return {
                 runtime: 'php',
@@ -69,10 +94,11 @@ export class DetectService {
                 startCommand: 'php -S 0.0.0.0:$PORT -t public',
                 defaultPort: 8080,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
-        // 7. Ruby (Gemfile)
+        // 8. Ruby (Gemfile)
         if (fileSet.has('Gemfile')) {
             return {
                 runtime: 'ruby',
@@ -80,10 +106,11 @@ export class DetectService {
                 startCommand: 'bundle exec ruby app.rb -p $PORT',
                 defaultPort: 4567,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
-        // 8. Java (pom.xml or build.gradle)
+        // 9. Java (pom.xml or build.gradle)
         if (fileSet.has('pom.xml') || fileSet.has('build.gradle') || fileSet.has('build.gradle.kts')) {
             const isMaven = fileSet.has('pom.xml');
             return {
@@ -92,10 +119,11 @@ export class DetectService {
                 startCommand: 'java -jar target/*.jar',
                 defaultPort: 8080,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
-        // 9. Rust (Cargo.toml)
+        // 10. Rust (Cargo.toml)
         if (fileSet.has('Cargo.toml')) {
             return {
                 runtime: 'rust',
@@ -103,10 +131,11 @@ export class DetectService {
                 startCommand: './target/release/*',
                 defaultPort: 8080,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
-        // 10. Elixir (mix.exs)
+        // 11. Elixir (mix.exs)
         if (fileSet.has('mix.exs')) {
             return {
                 runtime: 'elixir',
@@ -114,15 +143,17 @@ export class DetectService {
                 startCommand: 'mix phx.server',
                 defaultPort: 4000,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
-        // 11. Static site (has index.html)
+        // 12. Static site (has index.html)
         if (fileSet.has('index.html')) {
             return {
                 runtime: 'static',
                 defaultPort: 8080,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
 
@@ -130,6 +161,7 @@ export class DetectService {
             runtime: 'unknown',
             defaultPort: 8080,
             hasDockerfile: false,
+            useCompose: false,
         };
     }
 
@@ -174,6 +206,7 @@ export class DetectService {
                 startCommand,
                 defaultPort,
                 hasDockerfile: false,
+                useCompose: false,
             };
         } catch {
             return {
@@ -181,6 +214,7 @@ export class DetectService {
                 buildCommand: 'npm install',
                 defaultPort: 3000,
                 hasDockerfile: false,
+                useCompose: false,
             };
         }
     }
@@ -211,6 +245,7 @@ export class DetectService {
             startCommand,
             defaultPort,
             hasDockerfile: false,
+            useCompose: false,
         };
     }
 }

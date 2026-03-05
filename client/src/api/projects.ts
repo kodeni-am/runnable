@@ -36,6 +36,9 @@ export interface Project {
     buildCommand?: string;
     startCommand?: string;
     envVars?: Record<string, string>;
+    useCompose?: boolean;
+    composeFile?: string;
+    composeService?: string;
     userId: string;
     githubRepo?: {
         id: string;

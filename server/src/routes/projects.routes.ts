@@ -146,13 +146,17 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
     try {
         const project = (req as any).project as Project;
 
-        const { name, serverType, buildCommand, startCommand, envVars, port } = req.body;
+        const { name, serverType, buildCommand, startCommand, envVars, port,
+                useCompose, composeFile, composeService } = req.body;
         if (name) project.name = name;
         if (serverType) project.serverType = serverType as ServerType;
         if (buildCommand !== undefined) project.buildCommand = buildCommand;
         if (startCommand !== undefined) project.startCommand = startCommand;
         if (envVars !== undefined) project.envVars = envVars;
         if (port !== undefined) project.port = port;
+        if (useCompose !== undefined) project.useCompose = useCompose;
+        if (composeFile !== undefined) project.composeFile = composeFile;
+        if (composeService !== undefined) project.composeService = composeService;
 
         const projectRepo = AppDataSource.getRepository(Project);
         await projectRepo.save(project);
