@@ -144,30 +144,60 @@ export class ProcessService {
                 runArgs.push(imageName);
 
                 // Only override the container start command if the user explicitly set one.
-                // Railpack auto-detects the start command (e.g. from package.json scripts.start)
-                // and bakes it into the image — we should NOT override that with our
-                // auto-detected default since Railpack runs inside the correct environment.
+                // Railpack's entrypoint is ["/bin/bash", "-c"] and handles setting up the
+                // nix environment, PATH, and runtime dependencies. We must NOT replace that
+                // with --entrypoint sh. Instead, pass the custom command as CMD args AFTER
+                // the image name — Docker will feed it to Railpack's entrypoint as-is.
                 if (project.startCommand) {
-                    // Railpack sets entrypoint to ["/bin/bash", "-c"], so we must use
-                    // --entrypoint to override it and pass the command as CMD args.
-                    const imageIdx = runArgs.indexOf(imageName);
-                    runArgs.splice(imageIdx, 0, '--entrypoint', 'sh');
-                    runArgs.push('-c', project.startCommand);
+                    runArgs.push(project.startCommand);
                 }
 
                 const runResult = await SandboxService.exec(projectId, 'docker', runArgs);
                 await logAndCheck(runResult, 'Docker Run');
 
-                // 4. Inspect the dynamic host port
-                const portResult = await SandboxService.exec(projectId, 'docker', ['port', containerName, String(internalPort)]);
-                await logAndCheck(portResult, 'Docker Port Inspect');
+                // 4. Wait for the container to be running, then inspect the dynamic host port.
+                // NetworkSettings.Ports (used by `docker port`) is only populated while the
+                // container is in "running" state, so we retry for up to ~10 seconds.
+                let actualHostPort: number | null = null;
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
 
-                const match = portResult.stdout.match(/:(\d+)/);
-                if (!match) {
-                    throw new Error('Could not determine dynamic host port for Docker container');
+                    const stateResult = await SandboxService.exec(projectId, 'docker', [
+                        'inspect', '--format', '{{.State.Status}}', containerName,
+                    ]);
+                    const state = stateResult.stdout.trim();
+                    await fs.appendFile(buildLogPath, `[Port wait] attempt ${attempt + 1}: container state = ${state}\n`);
+
+                    if (state === 'exited' || state === 'dead') {
+                        // Grab container logs to give a useful error message
+                        const crashLogs = await SandboxService.exec(projectId, 'docker', ['logs', '--tail', '50', containerName]);
+                        await fs.appendFile(buildLogPath, `--- Container Crash Logs ---\n${crashLogs.stdout}\n${crashLogs.stderr}\n`);
+                        throw new Error(
+                            `Container exited immediately (state: ${state}). Check start command and container logs.\n${crashLogs.stderr || crashLogs.stdout}`
+                        );
+                    }
+
+                    if (state === 'running') {
+                        const portResult = await SandboxService.exec(projectId, 'docker', ['port', containerName, String(internalPort)]);
+                        await fs.appendFile(buildLogPath, `--- Docker Port Inspect ---\nSTDOUT:\n${portResult.stdout}\nSTDERR:\n${portResult.stderr}\nEXIT CODE: ${portResult.exitCode}\n`);
+                        const match = portResult.stdout.match(/:(\d+)/);
+                        if (match) {
+                            actualHostPort = parseInt(match[1], 10);
+                            break;
+                        }
+                    }
                 }
 
-                actualPort = parseInt(match[1], 10);
+                if (!actualHostPort) {
+                    const stateResult = await SandboxService.exec(projectId, 'docker', [
+                        'inspect', '--format', '{{.State.Status}}', containerName,
+                    ]);
+                    throw new Error(
+                        `Could not determine dynamic host port for Docker container after 10s. Container state: ${stateResult.stdout.trim()}`
+                    );
+                }
+
+                actualPort = actualHostPort;
 
                 // Save container information to database
                 project.containerId = containerName;
