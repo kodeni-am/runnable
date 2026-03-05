@@ -83,6 +83,11 @@ export class ProcessService {
                 const effectiveBuildCommand = project.buildCommand || detection.buildCommand;
                 const effectiveStartCommand = project.startCommand || detection.startCommand;
 
+                // Parse project env vars — needed by both compose and Railpack paths
+                const userEnv = typeof project.envVars === 'string'
+                    ? JSON.parse(project.envVars)
+                    : (project.envVars || {});
+
                 // Determine whether to use docker compose or the Railpack single-container path
                 const useCompose = project.useCompose || detection.useCompose;
                 const composeFile = project.composeFile || detection.composeFile || 'docker-compose.yml';
@@ -101,10 +106,24 @@ export class ProcessService {
                     const composeName = `runnable-${projectId.substring(0, 8)}`;
                     await fs.appendFile(buildLogPath, `\nUsing docker compose (file: ${composeFile}, service: ${composeService}, project: ${composeName})\n`);
 
+                    // Write project env vars to a .runnable.env file so they are available
+                    // for variable interpolation in the compose YAML and for `environment:`
+                    // keys without explicit values.
+                    const envFilePath = path.join(project.directoryPath, '.runnable.env');
+                    const envFileContent = Object.entries(userEnv)
+                        .map(([k, v]) => `${k}=${String(v).replace(/\n/g, '\\n')}`)
+                        .join('\n');
+                    await fs.writeFile(envFilePath, envFileContent + '\n');
+                    await fs.appendFile(buildLogPath,
+                        `Wrote ${Object.keys(userEnv).length} env var(s) to .runnable.env\n`);
+
+                    // Base compose args — reused across all commands
+                    const composeBase = ['compose', '-p', composeName, '--env-file', envFilePath, '-f', composeFile];
+
                     // Bring down any previous compose stack for this project
                     await SandboxService.exec(
                         projectId, 'docker',
-                        ['compose', '-p', composeName, '-f', composeFile, 'down', '--remove-orphans'],
+                        [...composeBase, 'down', '--remove-orphans'],
                         project.directoryPath,
                     );
 
@@ -112,7 +131,7 @@ export class ProcessService {
                     await fs.appendFile(buildLogPath, '\n--- Docker Compose Up (streaming) ---\n');
                     const composeExitCode = await SandboxService.spawn(
                         projectId, 'docker',
-                        ['compose', '-p', composeName, '-f', composeFile, 'up', '--build', '-d'],
+                        [...composeBase, 'up', '--build', '-d'],
                         buildLogPath,
                         project.directoryPath,
                     );
@@ -130,7 +149,7 @@ export class ProcessService {
 
                         const portResult = await SandboxService.exec(
                             projectId, 'docker',
-                            ['compose', '-p', composeName, '-f', composeFile, 'port', composeService, String(internalPort)],
+                            [...composeBase, 'port', composeService, String(internalPort)],
                             project.directoryPath,
                         );
                         await fs.appendFile(buildLogPath,
@@ -146,7 +165,7 @@ export class ProcessService {
                     if (!actualHostPort) {
                         const psResult = await SandboxService.exec(
                             projectId, 'docker',
-                            ['compose', '-p', composeName, '-f', composeFile, 'ps'],
+                            [...composeBase, 'ps'],
                             project.directoryPath,
                         );
                         await fs.appendFile(buildLogPath, `--- Compose PS ---\n${psResult.stdout}\n`);
@@ -159,6 +178,7 @@ export class ProcessService {
 
                     actualPort = actualHostPort;
                     // Store the compose project name in containerId so stop/logs can reference it
+                    // Also persist the env file path so stop() can clean it up
                     project.containerId = composeName;
                     project.internalPort = internalPort;
                     project.port = actualPort;
@@ -186,7 +206,6 @@ export class ProcessService {
                     };
 
                     // 0. Run build command (user-provided or auto-detected)
-                    const userEnv = typeof project.envVars === 'string' ? JSON.parse(project.envVars) : (project.envVars || {});
                     if (effectiveBuildCommand) {
                         await fs.appendFile(buildLogPath, `\n--- Build Command: ${effectiveBuildCommand} ---\n`);
                         const buildEnv = { ...buildkitEnv, ...userEnv };
@@ -333,11 +352,14 @@ export class ProcessService {
             if (project.useCompose) {
                 // Tear down the entire compose stack
                 const composeFile = project.composeFile || 'docker-compose.yml';
+                const envFilePath = path.join(project.directoryPath, '.runnable.env');
                 await SandboxService.exec(
                     projectId, 'docker',
-                    ['compose', '-p', project.containerId, '-f', composeFile, 'down', '--remove-orphans'],
+                    ['compose', '-p', project.containerId, '--env-file', envFilePath, '-f', composeFile, 'down', '--remove-orphans'],
                     project.directoryPath,
                 );
+                // Remove the generated env file
+                await fs.unlink(envFilePath).catch(() => {});
             } else {
                 await SandboxService.exec(projectId, 'docker', ['stop', project.containerId]);
                 await SandboxService.exec(projectId, 'docker', ['rm', '-f', project.containerId]);
