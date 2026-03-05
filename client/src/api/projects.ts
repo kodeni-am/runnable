@@ -27,7 +27,7 @@ export interface Project {
     name: string;
     subdomain: string;
     directoryPath: string;
-    serverType: 'caddy' | 'apache' | 'nginx' | 'static';
+    serverType: 'caddy' | 'apache' | 'nginx' | 'static' | 'app';
     status: 'running' | 'stopped' | 'error' | 'deploying';
     port?: number;
     configPath?: string;
