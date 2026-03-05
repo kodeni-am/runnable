@@ -9,6 +9,67 @@ import { config } from '../config';
 
 const router = Router();
 
+// GitHub webhook receiver (no auth - verified by HMAC signature)
+// MUST be registered before the authenticate/requireApproval middleware
+router.post('/webhooks/github', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const signature = req.headers['x-hub-signature-256'] as string;
+        if (!signature) {
+            res.status(400).json({ error: 'Missing signature' });
+            return;
+        }
+
+        const event = req.headers['x-github-event'] as string;
+        if (event !== 'push') {
+            res.json({ message: 'Event ignored' });
+            return;
+        }
+
+        // Use raw body bytes for signature verification (GitHub signs raw bytes)
+        const rawBody = (req as any).rawBody as Buffer | undefined;
+        const payload = rawBody ? rawBody.toString() : JSON.stringify(req.body);
+
+        const repoUrl = req.body.repository?.html_url;
+
+        if (!repoUrl) {
+            res.status(400).json({ error: 'Invalid payload' });
+            return;
+        }
+
+        // Find the project by repo URL
+        const githubRepoRepo = AppDataSource.getRepository(GithubRepo);
+        const githubRepo = await githubRepoRepo.findOne({
+            where: { repoUrl },
+            relations: ['project'],
+        });
+
+        if (!githubRepo || !githubRepo.webhookSecret) {
+            res.status(404).json({ error: 'Repo not found' });
+            return;
+        }
+
+        // Verify signature
+        const isValid = GithubService.verifyWebhookSignature(payload, signature, githubRepo.webhookSecret);
+        if (!isValid) {
+            res.status(401).json({ error: 'Invalid signature' });
+            return;
+        }
+
+        // Check if push is to the correct branch
+        const branch = req.body.ref?.replace('refs/heads/', '');
+        if (branch !== githubRepo.branch) {
+            res.json({ message: `Push to ${branch} ignored, watching ${githubRepo.branch}` });
+            return;
+        }
+
+        // Trigger deploy
+        await GithubService.handlePushEvent(githubRepo.project.id);
+        res.json({ message: 'Deployment triggered' });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // All project-scoped routes require auth + approval
 router.use(authenticate, requireApproval);
 
@@ -108,63 +169,6 @@ router.delete('/:id/github/disconnect', requireProjectAccess(ProjectPermission.C
 
         await AppDataSource.getRepository(GithubRepo).remove(project.githubRepo);
         res.json({ message: 'GitHub repo disconnected' });
-    } catch (error) {
-        next(error);
-    }
-});
-
-// GitHub webhook receiver (no auth - verified by signature)
-router.post('/webhooks/github', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const signature = req.headers['x-hub-signature-256'] as string;
-        if (!signature) {
-            res.status(400).json({ error: 'Missing signature' });
-            return;
-        }
-
-        const event = req.headers['x-github-event'] as string;
-        if (event !== 'push') {
-            res.json({ message: 'Event ignored' });
-            return;
-        }
-
-        const payload = JSON.stringify(req.body);
-        const repoUrl = req.body.repository?.html_url;
-
-        if (!repoUrl) {
-            res.status(400).json({ error: 'Invalid payload' });
-            return;
-        }
-
-        // Find the project by repo URL
-        const githubRepoRepo = AppDataSource.getRepository(GithubRepo);
-        const githubRepo = await githubRepoRepo.findOne({
-            where: { repoUrl },
-            relations: ['project'],
-        });
-
-        if (!githubRepo || !githubRepo.webhookSecret) {
-            res.status(404).json({ error: 'Repo not found' });
-            return;
-        }
-
-        // Verify signature
-        const isValid = GithubService.verifyWebhookSignature(payload, signature, githubRepo.webhookSecret);
-        if (!isValid) {
-            res.status(401).json({ error: 'Invalid signature' });
-            return;
-        }
-
-        // Check if push is to the correct branch
-        const branch = req.body.ref?.replace('refs/heads/', '');
-        if (branch !== githubRepo.branch) {
-            res.json({ message: `Push to ${branch} ignored, watching ${githubRepo.branch}` });
-            return;
-        }
-
-        // Trigger deploy
-        await GithubService.handlePushEvent(githubRepo.project.id);
-        res.json({ message: 'Deployment triggered' });
     } catch (error) {
         next(error);
     }

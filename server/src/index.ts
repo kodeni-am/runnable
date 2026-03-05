@@ -81,7 +81,12 @@ async function bootstrap() {
         origin: process.env.CLIENT_URL || 'http://localhost:5175',
         credentials: true,
     }));
-    app.use(express.json({ limit: '3mb' }));
+    app.use(express.json({
+        limit: '3mb',
+        verify: (req: any, _res, buf) => {
+            req.rawBody = buf;
+        },
+    }));
     app.use(express.urlencoded({ extended: true }));
     app.use(cookieParser());
     app.use(passport.initialize());
