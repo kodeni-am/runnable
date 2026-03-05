@@ -123,7 +123,12 @@ export class ProcessService {
                 await SandboxService.exec(projectId, 'docker', ['rm', '-f', containerName]);
 
                 // 3. Run container and map internal port to random host port
-                const internalPort = project.port || 8080;
+                // Use internalPort (the container-side port) — NOT project.port which
+                // gets overwritten with the dynamic host port after each successful run.
+                // On first run internalPort is null, so fall back to project.port (the
+                // initial assigned port). From the second run onwards internalPort is
+                // always set correctly.
+                const internalPort = project.internalPort || project.port || 8080;
                 const runArgs = [
                     'run', '-d',
                     '--name', containerName,
