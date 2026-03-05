@@ -91,11 +91,14 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
         }
 
         // Allocate port (start from 9000, find next available)
+        // Use internalPort (the container-side port) for allocation — project.port
+        // gets overwritten with the dynamic host port after each run and cannot be
+        // used to determine the highest assigned container port.
         const lastProject = await projectRepo
             .createQueryBuilder('project')
-            .orderBy('project.port', 'DESC')
+            .orderBy('project.internalPort', 'DESC')
             .getOne();
-        const port = (lastProject?.port || 8999) + 1;
+        const port = (lastProject?.internalPort || 8999) + 1;
 
         const directoryPath = path.join(config.hosting.servDir, subdomain);
 
@@ -107,6 +110,7 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
             serverType: serverType as ServerType,
             status: ServiceStatus.STOPPED,
             port,
+            internalPort: port, // always set so port allocation and start() can rely on this
             userId: req.user!.id,
         });
 
