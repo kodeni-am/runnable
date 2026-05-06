@@ -60,6 +60,8 @@ export default function ProjectDetail() {
     const [buildCommand, setBuildCommand] = useState('');
     const [startCommand, setStartCommand] = useState('');
     const [envVars, setEnvVars] = useState<{ key: string, value: string }[]>([]);
+    const [envVarsTextMode, setEnvVarsTextMode] = useState(false);
+    const [envVarsText, setEnvVarsText] = useState('');
     const [saveLoading, setSaveLoading] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
     // Compose settings state
@@ -228,7 +230,9 @@ export default function ProjectDetail() {
         setSaveLoading(true);
         setSaveSuccess(false);
         try {
-            const envObj = envVars.reduce((acc, { key, value }) => {
+            const envSource = envVarsTextMode ? envTextToArray(envVarsText) : envVars;
+            if (envVarsTextMode) setEnvVars(envSource);
+            const envObj = envSource.reduce((acc, { key, value }) => {
                 if (key.trim()) acc[key.trim()] = value;
                 return acc;
             }, {} as Record<string, string>);
@@ -290,6 +294,38 @@ export default function ProjectDetail() {
         const newEnvs = [...envVars];
         newEnvs[index][field] = value;
         setEnvVars(newEnvs);
+    };
+
+    const envArrayToText = (arr: { key: string, value: string }[]) =>
+        arr.filter(e => e.key.trim()).map(e => `${e.key.trim()}=${e.value}`).join('\n');
+
+    const envTextToArray = (text: string): { key: string, value: string }[] => {
+        const result: { key: string, value: string }[] = [];
+        for (const rawLine of text.split('\n')) {
+            const line = rawLine.trim();
+            if (!line || line.startsWith('#')) continue;
+            const eq = line.indexOf('=');
+            if (eq === -1) {
+                result.push({ key: line, value: '' });
+                continue;
+            }
+            let value = line.slice(eq + 1).trim();
+            if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+            result.push({ key: line.slice(0, eq).trim(), value });
+        }
+        return result;
+    };
+
+    const toggleEnvVarsTextMode = () => {
+        if (envVarsTextMode) {
+            setEnvVars(envTextToArray(envVarsText));
+            setEnvVarsTextMode(false);
+        } else {
+            setEnvVarsText(envArrayToText(envVars));
+            setEnvVarsTextMode(true);
+        }
     };
 
     const PermCheckbox = ({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) => (
@@ -695,39 +731,65 @@ export default function ProjectDetail() {
                             <div className="form-group">
                                 <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     Environment Variables
-                                    {canEditConfig && (
-                                        <button className="btn btn-secondary" onClick={addEnvVar} style={{ padding: '4px 8px', fontSize: 12 }}>
-                                            <Plus size={14} /> Add Variable
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={toggleEnvVarsTextMode}
+                                            style={{ padding: '4px 8px', fontSize: 12 }}
+                                        >
+                                            {envVarsTextMode ? 'Edit as Form' : 'Edit as Text'}
                                         </button>
-                                    )}
+                                        {canEditConfig && !envVarsTextMode && (
+                                            <button className="btn btn-secondary" onClick={addEnvVar} style={{ padding: '4px 8px', fontSize: 12 }}>
+                                                <Plus size={14} /> Add Variable
+                                            </button>
+                                        )}
+                                    </div>
                                 </label>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-                                    {envVars.map((env, index) => (
-                                        <div key={index} style={{ display: 'flex', gap: 8 }}>
-                                            <input
-                                                className="form-input"
-                                                style={{ flex: 1 }}
-                                                placeholder="KEY"
-                                                value={env.key}
-                                                onChange={(e) => updateEnvVar(index, 'key', e.target.value)}
-                                                disabled={!canEditConfig}
-                                            />
-                                            <input
-                                                className="form-input"
-                                                style={{ flex: 1 }}
-                                                placeholder="VALUE"
-                                                value={env.value}
-                                                onChange={(e) => updateEnvVar(index, 'value', e.target.value)}
-                                                disabled={!canEditConfig}
-                                            />
-                                            {canEditConfig && (
-                                                <button className="btn btn-danger" onClick={() => removeEnvVar(index)} style={{ padding: 8 }}>
-                                                    <XCircle size={16} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
+                                {envVarsTextMode ? (
+                                    <div style={{ marginTop: 10 }}>
+                                        <textarea
+                                            className="form-input"
+                                            style={{ width: '100%', minHeight: 200, fontFamily: 'monospace', fontSize: 13, resize: 'vertical' }}
+                                            placeholder={'KEY=value\nANOTHER_KEY=another value\n# comments and blank lines are ignored'}
+                                            value={envVarsText}
+                                            onChange={(e) => setEnvVarsText(e.target.value)}
+                                            disabled={!canEditConfig}
+                                        />
+                                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                            One variable per line in <code>KEY=value</code> format. Lines starting with <code>#</code> are ignored.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                                        {envVars.map((env, index) => (
+                                            <div key={index} style={{ display: 'flex', gap: 8 }}>
+                                                <input
+                                                    className="form-input"
+                                                    style={{ flex: 1 }}
+                                                    placeholder="KEY"
+                                                    value={env.key}
+                                                    onChange={(e) => updateEnvVar(index, 'key', e.target.value)}
+                                                    disabled={!canEditConfig}
+                                                />
+                                                <input
+                                                    className="form-input"
+                                                    style={{ flex: 1 }}
+                                                    placeholder="VALUE"
+                                                    value={env.value}
+                                                    onChange={(e) => updateEnvVar(index, 'value', e.target.value)}
+                                                    disabled={!canEditConfig}
+                                                />
+                                                {canEditConfig && (
+                                                    <button className="btn btn-danger" onClick={() => removeEnvVar(index)} style={{ padding: 8 }}>
+                                                        <XCircle size={16} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {canEditConfig && (
