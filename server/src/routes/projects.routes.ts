@@ -146,7 +146,7 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
     try {
         const project = (req as any).project as Project;
 
-        const { name, serverType, buildCommand, startCommand, envVars, port,
+        const { name, serverType, buildCommand, startCommand, envVars, port, internalPort,
                 useCompose, composeFile, composeService } = req.body;
         if (name) project.name = name;
         if (serverType) project.serverType = serverType as ServerType;
@@ -154,6 +154,13 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
         if (startCommand !== undefined) project.startCommand = startCommand;
         if (envVars !== undefined) project.envVars = envVars;
         if (port !== undefined) project.port = port;
+        if (internalPort !== undefined) {
+            const n = Number(internalPort);
+            if (!Number.isInteger(n) || n < 1 || n > 65535) {
+                throw new AppError('internalPort must be an integer between 1 and 65535', 400);
+            }
+            project.internalPort = n;
+        }
         if (useCompose !== undefined) project.useCompose = useCompose;
         if (composeFile !== undefined) project.composeFile = composeFile;
         if (composeService !== undefined) project.composeService = composeService;

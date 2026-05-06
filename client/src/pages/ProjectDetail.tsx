@@ -68,6 +68,7 @@ export default function ProjectDetail() {
     const [useCompose, setUseCompose] = useState(false);
     const [composeFile, setComposeFile] = useState('docker-compose.yml');
     const [composeService, setComposeService] = useState('');
+    const [internalPort, setInternalPort] = useState<string>('');
 
     // Collaborator state
     const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -109,6 +110,7 @@ export default function ProjectDetail() {
                     setUseCompose(p.useCompose || false);
                     setComposeFile(p.composeFile || 'docker-compose.yml');
                     setComposeService(p.composeService || '');
+                    setInternalPort(p.internalPort != null ? String(p.internalPort) : '');
                 }
             });
         }
@@ -237,6 +239,14 @@ export default function ProjectDetail() {
                 return acc;
             }, {} as Record<string, string>);
 
+            const trimmedPort = internalPort.trim();
+            const parsedPort = trimmedPort === '' ? undefined : Number(trimmedPort);
+            if (parsedPort !== undefined && (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)) {
+                alert('Internal Port must be an integer between 1 and 65535');
+                setSaveLoading(false);
+                return;
+            }
+
             await projectsApi.update(id, {
                 buildCommand,
                 startCommand,
@@ -244,6 +254,7 @@ export default function ProjectDetail() {
                 useCompose,
                 composeFile: composeFile || 'docker-compose.yml',
                 composeService,
+                ...(parsedPort !== undefined ? { internalPort: parsedPort } : {}),
             });
             await fetchProject(id);
             setSaveSuccess(true);
@@ -708,7 +719,7 @@ export default function ProjectDetail() {
                                                     Path to the compose file, relative to the project root.
                                                 </p>
                                             </div>
-                                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                            <div className="form-group" style={{ marginBottom: 12 }}>
                                                 <label style={{ fontSize: 13 }}>
                                                     Primary Service <span style={{ color: 'var(--status-error)' }}>*</span>
                                                 </label>
@@ -721,6 +732,22 @@ export default function ProjectDetail() {
                                                 />
                                                 <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
                                                     The service name whose published port Runnable will proxy (must match a service key in the compose file).
+                                                </p>
+                                            </div>
+                                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                                <label style={{ fontSize: 13 }}>Internal Port</label>
+                                                <input
+                                                    className="form-input"
+                                                    type="number"
+                                                    min={1}
+                                                    max={65535}
+                                                    placeholder="e.g. 8080"
+                                                    value={internalPort}
+                                                    onChange={(e) => setInternalPort(e.target.value)}
+                                                    disabled={!canEditConfig}
+                                                />
+                                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                    The container-side port your primary service listens on (the right side of <code>"host:container"</code> in <code>ports:</code>, or the value in <code>expose:</code>). Runnable uses this to discover the published host port.
                                                 </p>
                                             </div>
                                         </>
