@@ -31,10 +31,26 @@ export class GithubService {
         }
     }
 
-    static async pullLatest(projectId: string, dir: string): Promise<void> {
-        const result = await SandboxService.exec(projectId, 'git', ['pull', 'origin', 'HEAD'], dir);
-        if (result.exitCode !== 0) {
-            throw new Error(`Git pull failed: ${result.stderr}`);
+    static async pullLatest(projectId: string, dir: string, branch: string = 'main'): Promise<void> {
+        // Fetch the latest tip of the configured branch. The clone is shallow + single-branch,
+        // so we need an explicit branch name here — `git pull origin HEAD` would resolve to the
+        // remote's default branch (typically main), not the branch the project is tracking.
+        const fetchResult = await SandboxService.exec(
+            projectId, 'git',
+            ['fetch', '--depth', '1', 'origin', branch],
+            dir,
+        );
+        if (fetchResult.exitCode !== 0) {
+            throw new Error(`Git fetch failed: ${fetchResult.stderr}`);
+        }
+
+        const resetResult = await SandboxService.exec(
+            projectId, 'git',
+            ['reset', '--hard', `origin/${branch}`],
+            dir,
+        );
+        if (resetResult.exitCode !== 0) {
+            throw new Error(`Git reset failed: ${resetResult.stderr}`);
         }
     }
 
@@ -116,8 +132,8 @@ export class GithubService {
         await projectRepo.save(project);
 
         try {
-            // Pull latest changes
-            await GithubService.pullLatest(projectId, project.directoryPath);
+            // Pull latest changes from the branch this project is tracking
+            await GithubService.pullLatest(projectId, project.directoryPath, project.githubRepo.branch);
 
             // Update last deploy timestamp
             const repoRepo = AppDataSource.getRepository(GithubRepo);
