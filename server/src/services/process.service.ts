@@ -406,7 +406,15 @@ export class ProcessService {
                     if (project.useCompose) {
                         // For compose projects, containerId holds the compose project name
                         const composeFile = project.composeFile || 'docker-compose.yml';
-                        const args = ['compose', '-p', project.containerId, '-f', composeFile,
+                        const envFilePath = path.join(project.directoryPath, '.runnable.env');
+                        // Pass --env-file when present so compose doesn't warn about
+                        // unset ${VAR} interpolations while parsing the YAML.
+                        const envFileArgs: string[] = [];
+                        try {
+                            await fs.access(envFilePath);
+                            envFileArgs.push('--env-file', envFilePath);
+                        } catch { /* env file not yet written, skip */ }
+                        const args = ['compose', '-p', project.containerId, ...envFileArgs, '-f', composeFile,
                             'logs', '--tail', String(lines), '--no-color'];
                         // Optionally scope to the primary service only
                         if (project.composeService) args.push(project.composeService);
