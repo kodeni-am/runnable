@@ -29,6 +29,7 @@ export const config = {
     hosting: {
         servDir: process.env.SERV_DIR || '/var/runnable/projects',
         baseDomain: process.env.BASE_DOMAIN || 'localhost',
+        apiBaseUrl: process.env.API_BASE_URL || `https://api.${process.env.BASE_DOMAIN || 'localhost'}`,
         maxUploadSizeMB: parseInt(process.env.MAX_UPLOAD_SIZE_MB || '512', 10),
     },
 

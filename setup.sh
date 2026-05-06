@@ -263,6 +263,7 @@ ADMIN_PASSWORD=${ADMIN_PASSWORD}
 # ── Hosting ──
 SERV_DIR=/var/runnable/projects
 BASE_DOMAIN=${DOMAIN}
+API_BASE_URL=https://api.${DOMAIN}
 MAX_UPLOAD_SIZE_MB=512
 
 # ── GitHub OAuth (fill in after creating GitHub App) ──

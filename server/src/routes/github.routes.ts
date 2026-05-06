@@ -111,7 +111,7 @@ router.post('/:id/github/connect', requireProjectAccess(ProjectPermission.CAN_ED
         let webhookSecret: string | undefined;
 
         if (user.githubToken) {
-            const callbackUrl = `https://api.${config.hosting.baseDomain}/api/webhooks/github`;
+            const callbackUrl = `${config.hosting.apiBaseUrl.replace(/\/$/, '')}/api/webhooks/github`;
             const webhook = await GithubService.setupWebhook(repoUrl, user.githubToken, callbackUrl);
             webhookId = webhook.webhookId;
             webhookSecret = webhook.secret;
