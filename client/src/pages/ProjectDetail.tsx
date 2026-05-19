@@ -7,6 +7,7 @@ import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
 import FileBrowser from '../components/FileBrowser';
 import LogViewer from '../components/LogViewer';
+import ContainersViewer from '../components/ContainersViewer';
 import { usePageTitle } from '../hooks/usePageTitle';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
@@ -32,7 +33,7 @@ export default function ProjectDetail() {
     const { currentProject, fetchProject, deleteProject } = useProjectStore();
     const { user: currentUser } = useAuthStore();
     usePageTitle(currentProject ? currentProject.name : 'Project Details');
-    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs' | 'settings' | 'collaborators'>('overview');
+    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs' | 'containers' | 'settings' | 'collaborators'>('overview');
     const [actionLoading, setActionLoading] = useState('');
 
     // GitHub connect state
@@ -364,6 +365,7 @@ export default function ProjectDetail() {
     if (canViewGithub) availableTabs.push('github');
     if (canViewDomains || canEditDomains) availableTabs.push('domains');
     if (canViewLogs) availableTabs.push('logs');
+    if (canViewLogs && p?.serverType === 'app') availableTabs.push('containers');
     if (canViewSettings || canEditConfig) availableTabs.push('settings');
     if (canManageCollaborators) availableTabs.push('collaborators');
 
@@ -652,6 +654,9 @@ export default function ProjectDetail() {
 
                 {/* LOGS TAB */}
                 {tab === 'logs' && <LogViewer projectId={p.id} />}
+
+                {/* CONTAINERS TAB */}
+                {tab === 'containers' && <ContainersViewer projectId={p.id} />}
 
                 {/* SETTINGS TAB */}
                 {tab === 'settings' && (canEditConfig || canViewSettings) && (

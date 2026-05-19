@@ -22,6 +22,15 @@ export interface Collaborator {
     createdAt: string;
 }
 
+export interface ContainerInfo {
+    id: string;
+    name: string;
+    service: string;
+    state: string;
+    status: string;
+    ports: string;
+}
+
 export interface Project {
     id: string;
     name: string;
@@ -80,6 +89,13 @@ export const projectsApi = {
     reloadProxy: (id: string) => api.post(`/projects/${id}/reload-proxy`),
     status: (id: string) => api.get(`/projects/${id}/status`),
     logs: (id: string, lines?: number) => api.get(`/projects/${id}/logs`, { params: { lines } }),
+    listContainers: (id: string) =>
+        api.get<{ containers: ContainerInfo[] }>(`/projects/${id}/containers`),
+    containerLogs: (id: string, container: string, lines?: number) =>
+        api.get<{ logs: string[] }>(
+            `/projects/${id}/containers/${encodeURIComponent(container)}/logs`,
+            { params: { lines } },
+        ),
 
     // GitHub
     connectGithub: (id: string, repoUrl: string, branch?: string) =>

@@ -292,6 +292,31 @@ router.get('/:id/logs', requireProjectAccess(ProjectPermission.CAN_VIEW_LOGS), a
     }
 });
 
+// List the project's Docker containers
+router.get('/:id/containers', requireProjectAccess(ProjectPermission.CAN_VIEW_LOGS), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const containers = await ProcessService.listContainers(req.params.id as string);
+        res.json({ containers });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Logs for a single container within the project
+router.get('/:id/containers/:container/logs', requireProjectAccess(ProjectPermission.CAN_VIEW_LOGS), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const lines = parseInt(req.query.lines as string) || 200;
+        const logs = await ProcessService.getContainerLogs(
+            req.params.id as string,
+            req.params.container as string,
+            lines,
+        );
+        res.json({ logs });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // --- Collaborator management (owner/admin only) ---
 
 // List collaborators

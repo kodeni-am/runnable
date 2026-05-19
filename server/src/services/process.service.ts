@@ -453,6 +453,125 @@ export class ProcessService {
         }
     }
 
+    /**
+     * List the Docker containers belonging to a project.
+     * For compose projects this returns every service container in the stack;
+     * for single-container (Railpack/Dockerfile) projects it returns the one
+     * container. Returns [] for non-APP projects or when nothing is running.
+     */
+    static async listContainers(projectId: string): Promise<Array<{
+        id: string;
+        name: string;
+        service: string;
+        state: string;
+        status: string;
+        ports: string;
+    }>> {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const project = await projectRepo.findOne({ where: { id: projectId } });
+        if (!project || project.serverType !== ServerType.APP || !project.containerId) {
+            return [];
+        }
+
+        try {
+            if (project.useCompose) {
+                const composeFile = project.composeFile || 'docker-compose.yml';
+                const envFilePath = path.join(project.directoryPath, '.runnable.env');
+                const envFileArgs: string[] = [];
+                try {
+                    await fs.access(envFilePath);
+                    envFileArgs.push('--env-file', envFilePath);
+                } catch { /* env file not yet written */ }
+
+                const { stdout } = await SandboxService.exec(
+                    project.id, 'docker',
+                    ['compose', '-p', project.containerId, ...envFileArgs, '-f', composeFile,
+                        'ps', '-a', '--format', 'json'],
+                    project.directoryPath,
+                );
+                return ProcessService.parseComposePs(stdout);
+            }
+
+            const { stdout } = await SandboxService.exec(
+                project.id, 'docker',
+                ['ps', '-a', '--filter', `name=^${project.containerId}$`, '--format', 'json'],
+            );
+            return ProcessService.parseDockerPs(stdout);
+        } catch {
+            return [];
+        }
+    }
+
+    private static parseComposePs(stdout: string): Array<any> {
+        const trimmed = stdout.trim();
+        if (!trimmed) return [];
+        // Newer docker compose emits one JSON object per line; older emits a JSON array.
+        let rows: any[];
+        try {
+            const parsed = JSON.parse(trimmed);
+            rows = Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+            rows = trimmed.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+                try { return JSON.parse(l); } catch { return null; }
+            }).filter(Boolean);
+        }
+        return rows.map(r => ({
+            id: r.ID || r.Id || '',
+            name: r.Name || '',
+            service: r.Service || '',
+            state: r.State || '',
+            status: r.Status || '',
+            ports: Array.isArray(r.Publishers)
+                ? r.Publishers
+                    .filter((p: any) => p.PublishedPort)
+                    .map((p: any) => `${p.PublishedPort}:${p.TargetPort}`)
+                    .join(', ')
+                : (r.Ports || ''),
+        }));
+    }
+
+    private static parseDockerPs(stdout: string): Array<any> {
+        const trimmed = stdout.trim();
+        if (!trimmed) return [];
+        return trimmed.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+            try {
+                const r = JSON.parse(l);
+                return {
+                    id: r.ID || '',
+                    name: r.Names || '',
+                    service: r.Names || '',
+                    state: r.State || '',
+                    status: r.Status || '',
+                    ports: r.Ports || '',
+                };
+            } catch { return null; }
+        }).filter(Boolean) as any[];
+    }
+
+    /**
+     * Logs for a single container within a project. The container name is
+     * validated against the project's own container list so a caller cannot
+     * read logs of containers that don't belong to this project.
+     */
+    static async getContainerLogs(
+        projectId: string,
+        containerName: string,
+        lines: number = 200,
+    ): Promise<string[]> {
+        const containers = await ProcessService.listContainers(projectId);
+        const match = containers.find(c => c.name === containerName);
+        if (!match) {
+            return [`Container "${containerName}" does not belong to this project`];
+        }
+
+        const { stdout, stderr } = await SandboxService.exec(
+            projectId, 'docker',
+            ['logs', '--tail', String(lines), '--timestamps', match.name],
+        );
+        const logs = stdout || stderr;
+        return logs ? logs.split('\n').filter(Boolean) : ['No logs available'];
+    }
+
     private static emitStatus(projectId: string, status: ServiceStatus) {
         if (ProcessService.io) {
             ProcessService.io.emit('service:status', { projectId, status });
