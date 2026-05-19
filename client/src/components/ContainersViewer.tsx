@@ -2,6 +2,19 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { projectsApi, type ContainerInfo } from '../api/projects';
 import { RefreshCw, Radio, Box, ArrowLeft } from 'lucide-react';
 
+function StateBadge({ state }: { state: string }) {
+    const cls =
+        state === 'running' ? 'status-running'
+            : state === 'exited' || state === 'dead' ? 'status-error'
+                : 'status-stopped';
+    return (
+        <span className={`status-badge ${cls}`}>
+            <span className="status-dot" />
+            {state || 'unknown'}
+        </span>
+    );
+}
+
 export default function ContainersViewer({ projectId }: { projectId: string }) {
     const [containers, setContainers] = useState<ContainerInfo[]>([]);
     const [loadingList, setLoadingList] = useState(false);
@@ -52,19 +65,14 @@ export default function ContainersViewer({ projectId }: { projectId: string }) {
         logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [logs]);
 
-    const stateColor = (state: string) =>
-        state === 'running' ? 'var(--success, #16a34a)'
-            : state === 'exited' || state === 'dead' ? 'var(--danger, #dc2626)'
-                : 'var(--text-muted)';
-
     if (selected) {
         return (
             <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div className="container-detail-bar">
                     <button className="btn btn-secondary" onClick={() => { setSelected(null); setLive(false); }} style={{ fontSize: 13, padding: '6px 14px' }}>
                         <ArrowLeft size={14} /> Containers
                     </button>
-                    <h3 style={{ margin: 0, fontSize: 15 }}>{selected.name}</h3>
+                    <h3>{selected.name}</h3>
                     <div style={{ display: 'flex', gap: 8 }}>
                         <button
                             className={`btn ${live ? 'btn-primary' : 'btn-secondary'}`}
@@ -98,33 +106,27 @@ export default function ContainersViewer({ projectId }: { projectId: string }) {
             </div>
 
             {containers.length === 0 ? (
-                <div className="glass" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
+                <div className="container-empty">
                     {loadingList ? 'Loading containers…' : 'No containers running. Start the project to see its containers.'}
                 </div>
             ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="container-list">
                     {containers.map((c) => (
                         <button
                             key={c.id || c.name}
-                            className="glass"
+                            className="container-row"
                             onClick={() => setSelected(c)}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: 14, padding: 16,
-                                textAlign: 'left', cursor: 'pointer', border: 'none', width: '100%',
-                            }}
                         >
-                            <Box size={20} style={{ color: stateColor(c.state), flexShrink: 0 }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontWeight: 600, fontSize: 15 }}>
-                                    {c.service || c.name}
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <span className="container-row__icon">
+                                <Box size={20} />
+                            </span>
+                            <span className="container-row__main">
+                                <span className="container-row__name">{c.service || c.name}</span>
+                                <span className="container-row__meta">
                                     {c.name}{c.ports ? ` · ${c.ports}` : ''}
-                                </div>
-                            </div>
-                            <div style={{ fontSize: 13, color: stateColor(c.state), flexShrink: 0 }}>
-                                {c.status || c.state}
-                            </div>
+                                </span>
+                            </span>
+                            <StateBadge state={c.state} />
                         </button>
                     ))}
                 </div>
