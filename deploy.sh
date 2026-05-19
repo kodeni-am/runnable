@@ -8,8 +8,10 @@
 # (/var/www/runnable), not directly from the install dir.
 set -euo pipefail
 
-INSTALL_DIR=/root/runnable
-WEB_DIR=/var/www/runnable
+# INSTALL_DIR defaults to the directory this script lives in (the repo root).
+# WEB_DIR is where Caddy serves the client from; override via env if needed.
+INSTALL_DIR=${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
+WEB_DIR=${WEB_DIR:-/var/www/runnable}
 
 cd "$INSTALL_DIR"
 
