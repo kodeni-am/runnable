@@ -1,11 +1,42 @@
+import { useState, type FormEvent } from 'react';
 import Layout from '../components/Layout';
 import { useAuthStore } from '../store/authStore';
 import { Shield, User, Key } from 'lucide-react';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { authApi } from '../api/auth';
 
 export default function Settings() {
     usePageTitle('Settings');
     const { user } = useAuthStore();
+
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [pwError, setPwError] = useState('');
+    const [pwSuccess, setPwSuccess] = useState('');
+    const [pwLoading, setPwLoading] = useState(false);
+
+    const handleChangePassword = async (e: FormEvent) => {
+        e.preventDefault();
+        setPwError('');
+        setPwSuccess('');
+        if (newPassword !== confirmPassword) {
+            setPwError('New passwords do not match');
+            return;
+        }
+        setPwLoading(true);
+        try {
+            await authApi.changePassword({ currentPassword, newPassword });
+            setPwSuccess('Password updated successfully');
+            setCurrentPassword('');
+            setNewPassword('');
+            setConfirmPassword('');
+        } catch (err: any) {
+            setPwError(err.response?.data?.error || 'Failed to update password');
+        } finally {
+            setPwLoading(false);
+        }
+    };
 
     return (
         <Layout>
@@ -25,6 +56,53 @@ export default function Settings() {
                     <div className="info-card glass">
                         <div className="info-card-label"><Key size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />Role</div>
                         <div className="info-card-value" style={{ textTransform: 'uppercase' }}>{user?.role || '—'}</div>
+                    </div>
+                </div>
+
+                <div style={{ marginTop: 32 }}>
+                    <h3 style={{ marginBottom: 16 }}>Change Password</h3>
+                    <div className="info-card glass" style={{ maxWidth: 420 }}>
+                        {pwError && <div className="alert alert-error">{pwError}</div>}
+                        {pwSuccess && <div className="alert alert-success">{pwSuccess}</div>}
+                        <form onSubmit={handleChangePassword}>
+                            <div className="form-group">
+                                <label>Current Password</label>
+                                <input
+                                    type="password"
+                                    className="form-input"
+                                    placeholder="••••••••"
+                                    value={currentPassword}
+                                    onChange={(e) => setCurrentPassword(e.target.value)}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>New Password</label>
+                                <input
+                                    type="password"
+                                    className="form-input"
+                                    placeholder="••••••••"
+                                    value={newPassword}
+                                    onChange={(e) => setNewPassword(e.target.value)}
+                                    required
+                                    minLength={8}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>Confirm New Password</label>
+                                <input
+                                    type="password"
+                                    className="form-input"
+                                    placeholder="••••••••"
+                                    value={confirmPassword}
+                                    onChange={(e) => setConfirmPassword(e.target.value)}
+                                    required
+                                    minLength={8}
+                                />
+                            </div>
+                            <button type="submit" className="btn btn-primary" disabled={pwLoading}>
+                                {pwLoading ? <span className="spinner" /> : 'Update Password'}
+                            </button>
+                        </form>
                     </div>
                 </div>
 

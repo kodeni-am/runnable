@@ -12,4 +12,6 @@ export const authApi = {
     refresh: () => api.post('/auth/refresh'),
     logout: () => api.post('/auth/logout'),
     me: () => api.get('/auth/me'),
+    changePassword: (data: { currentPassword: string; newPassword: string }) =>
+        api.post('/auth/change-password', data),
 };

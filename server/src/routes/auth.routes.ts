@@ -213,6 +213,21 @@ router.get('/me', authenticate, (req: AuthRequest, res: Response) => {
     });
 });
 
+// Change password
+router.post('/change-password', authLimiter, authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        if (!newPassword) {
+            res.status(400).json({ error: 'New password is required' });
+            return;
+        }
+        await AuthService.changePassword(req.user!.id, currentPassword || '', newPassword);
+        res.json({ message: 'Password updated' });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // GitHub OAuth
 router.get('/github', (req: Request, res: Response, next: NextFunction) => {
     // Pass accessToken cookie (for linking) and redirect path in state

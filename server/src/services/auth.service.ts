@@ -45,6 +45,29 @@ export class AuthService {
         return { user, ...tokens };
     }
 
+    static async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+        if (!newPassword || newPassword.length < 8) {
+            throw new AppError('New password must be at least 8 characters', 400);
+        }
+
+        const user = await userRepo().findOne({ where: { id: userId } });
+        if (!user) {
+            throw new AppError('User not found', 404);
+        }
+
+        // Accounts created via OAuth may not have a password yet — let them set one
+        // without supplying a current password.
+        if (user.passwordHash) {
+            const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+            if (!isValid) {
+                throw new AppError('Current password is incorrect', 401);
+            }
+        }
+
+        user.passwordHash = await bcrypt.hash(newPassword, 12);
+        await userRepo().save(user);
+    }
+
     static async findOrCreateOAuthUser(profile: {
         provider: 'github' | 'google';
         id: string;
