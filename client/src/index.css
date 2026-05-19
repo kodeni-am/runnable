@@ -822,6 +822,12 @@ body {
 }
 
 /* ============ LOG CONSOLE (Kibana-style) ============ */
+.lc {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 .lc-header {
   display: flex;
   justify-content: space-between;
@@ -978,6 +984,9 @@ body {
 }
 
 .lc-body--nowrap .lc-msg-text { white-space: pre; }
+/* In nowrap mode each line is as wide as its content; the horizontal
+   scrollbar lives on .lc-body so it never leaks to the page. */
+.lc-body--nowrap .lc-line { width: max-content; min-width: 100%; }
 
 .lc-empty {
   text-align: center;
