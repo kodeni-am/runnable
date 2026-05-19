@@ -383,6 +383,23 @@ export class ProcessService {
         ProcessService.emitStatus(projectId, ServiceStatus.STOPPED);
     }
 
+    /**
+     * Tear down all runtime resources for a project: stop the container/compose
+     * stack and delete the built Docker image. Used on project deletion so we
+     * don't leak images on disk. Best-effort — never throws.
+     */
+    static async destroy(projectId: string): Promise<void> {
+        // Stop the container/compose stack regardless of recorded status —
+        // a leftover container can exist even when status isn't RUNNING
+        // (e.g. ERROR or BUILDING). stop() is a no-op when nothing is running.
+        await ProcessService.stop(projectId).catch(() => {});
+
+        // Remove the railpack-built image (`runnable-img-<id8>`). Built and run
+        // as the sandbox user, so this must run before the sandbox is destroyed.
+        const imageName = `runnable-img-${projectId.substring(0, 8)}`;
+        await SandboxService.exec(projectId, 'docker', ['rmi', '-f', imageName]).catch(() => {});
+    }
+
     static async restart(projectId: string): Promise<void> {
         await ProcessService.stop(projectId);
         await ProcessService.start(projectId);
