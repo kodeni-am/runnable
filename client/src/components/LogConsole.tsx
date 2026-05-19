@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react';
 import {
     RefreshCw, Radio, Search, Download, Copy, Trash2,
-    WrapText, ArrowDownToLine, Braces,
+    WrapText, ArrowDownToLine, Braces, AlertTriangle,
 } from 'lucide-react';
 
 type Level = 'error' | 'warn' | 'info' | 'debug';
@@ -92,6 +92,7 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
     const [query, setQuery] = useState('');
     const [regex, setRegex] = useState(false);
     const [off, setOff] = useState<Set<Level>>(new Set());
+    const [issuesOnly, setIssuesOnly] = useState(false);
     const [wrap, setWrap] = useState(true);
     const [follow, setFollow] = useState(true);
     const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -133,11 +134,17 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
         return parsed
             .map((p, i) => ({ p, i }))
             .filter(({ p }) => {
-                if (p.level && off.has(p.level)) return false;
+                // "Issues only" hides everything except error/warn — including
+                // untagged lines — and overrides the per-level filters.
+                if (issuesOnly) {
+                    if (p.level !== 'error' && p.level !== 'warn') return false;
+                } else if (p.level && off.has(p.level)) {
+                    return false;
+                }
                 if (query && re && !re.test(p.raw)) return false;
                 return true;
             });
-    }, [parsed, query, regex, off]);
+    }, [parsed, query, regex, off, issuesOnly]);
 
     useEffect(() => {
         if (follow) endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -204,13 +211,14 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
                     >.*</button>
                 </div>
 
-                <div className="lc-levels">
+                <div className={`lc-levels ${issuesOnly ? 'lc-levels--disabled' : ''}`}>
                     {LEVELS.map(l => (
                         <button
                             key={l}
                             className={`lc-level lc-level--${l} ${off.has(l) ? 'lc-level--off' : ''}`}
                             onClick={() => toggleLevel(l)}
-                            title={`Toggle ${l} lines`}
+                            disabled={issuesOnly}
+                            title={issuesOnly ? 'Disabled while "Issues only" is on' : `Toggle ${l} lines`}
                         >
                             <span className="lc-level-dot" />
                             {l} <span className="lc-level-count">{counts[l]}</span>
@@ -219,6 +227,11 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
                 </div>
 
                 <div className="lc-tools">
+                    <button
+                        className={`lc-tool ${issuesOnly ? 'lc-tool--on' : ''}`}
+                        onClick={() => setIssuesOnly(v => !v)}
+                        title="Issues only — show errors & warnings, hide all other logs"
+                    ><AlertTriangle size={15} /></button>
                     <button className={`lc-tool ${wrap ? 'lc-tool--on' : ''}`} onClick={() => setWrap(w => !w)} title="Wrap lines"><WrapText size={15} /></button>
                     <button className={`lc-tool ${follow ? 'lc-tool--on' : ''}`} onClick={() => setFollow(f => !f)} title="Auto-scroll to newest"><ArrowDownToLine size={15} /></button>
                     <button className="lc-tool" onClick={copy} title="Copy visible logs"><Copy size={15} /></button>

@@ -912,6 +912,7 @@ body {
 }
 
 .lc-levels { display: flex; gap: 6px; }
+.lc-levels--disabled { opacity: 0.35; pointer-events: none; }
 
 .lc-level {
   display: inline-flex;
