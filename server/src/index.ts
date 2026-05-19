@@ -21,6 +21,7 @@ import fileRoutes from './routes/files.routes';
 import githubRoutes from './routes/github.routes';
 import domainRoutes from './routes/domains.routes';
 import adminRoutes from './routes/admin.routes';
+import systemRoutes from './routes/system.routes';
 
 async function bootstrap() {
     // Initialize database
@@ -103,6 +104,7 @@ async function bootstrap() {
     app.use('/api/projects', githubRoutes);
     app.use('/api/projects', domainRoutes);
     app.use('/api/admin', adminRoutes);
+    app.use('/api/system', systemRoutes);
 
     // GitHub webhook (mounted at root level)
     app.use('/api', githubRoutes);

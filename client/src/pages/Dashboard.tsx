@@ -4,11 +4,14 @@ import { useProjectStore } from '../store/projectStore';
 import { Plus, Server, FolderGit2, Globe, Users } from 'lucide-react';
 import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
+import ServerStatsWidget from '../components/ServerStatsWidget';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useAuthStore } from '../store/authStore';
 
 export default function Dashboard() {
     usePageTitle('Dashboard');
     const { projects, isLoading, fetchProjects } = useProjectStore();
+    const { user } = useAuthStore();
     const navigate = useNavigate();
     const [showCreate, setShowCreate] = useState(false);
     const [name, setName] = useState('');
@@ -53,6 +56,8 @@ export default function Dashboard() {
             </div>
 
             <div className="page-content">
+                {user?.role === 'admin' && <ServerStatsWidget />}
+
                 {isLoading ? (
                     <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
                         <div className="spinner" style={{ width: 40, height: 40 }} />
