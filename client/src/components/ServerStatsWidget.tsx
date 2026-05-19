@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Cpu, MemoryStick, HardDrive, Activity, AlertCircle } from 'lucide-react';
+import { Cpu, MemoryStick, HardDrive, Activity, AlertCircle, ChevronRight, ArrowDown, ArrowUp } from 'lucide-react';
 import { systemApi, type SystemStats } from '../api/system';
 
 function formatBytes(bytes: number): string {
@@ -7,6 +7,10 @@ function formatBytes(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+}
+
+function formatRate(bytesPerSec: number): string {
+    return `${formatBytes(bytesPerSec)}/s`;
 }
 
 function formatUptime(sec: number): string {
@@ -47,6 +51,70 @@ function StatGauge({ icon, label, percent, detail }: StatGaugeProps) {
                 />
             </div>
             <div className="server-stat-detail">{detail}</div>
+        </div>
+    );
+}
+
+const LOAD_WINDOWS = ['1m', '5m', '15m'];
+
+function CpuGauge({ cpu }: { cpu: SystemStats['cpu'] }) {
+    const [open, setOpen] = useState(false);
+    const perCore = cpu.perCore ?? [];
+    return (
+        <div className="server-stat">
+            <div className="server-stat-head">
+                <span className="server-stat-label"><Cpu size={14} />CPU</span>
+                <span className="server-stat-percent" style={{ color: barColor(cpu.usedPercent) }}>
+                    {cpu.usedPercent.toFixed(0)}%
+                </span>
+            </div>
+            <div className="server-stat-track">
+                <div
+                    className="server-stat-fill"
+                    style={{ width: `${Math.min(100, cpu.usedPercent)}%`, background: barColor(cpu.usedPercent) }}
+                />
+            </div>
+            <div className="server-stat-detail">
+                {cpu.cores} cores · load{' '}
+                {cpu.loadAvg
+                    .map((l, i) => {
+                        const pct = cpu.cores > 0 ? (l / cpu.cores) * 100 : 0;
+                        return `${pct.toFixed(0)}% ${LOAD_WINDOWS[i] ?? ''}`.trim();
+                    })
+                    .join(' · ')}
+            </div>
+            {perCore.length > 1 && (
+                <>
+                    <button
+                        type="button"
+                        className="server-stat-toggle"
+                        aria-expanded={open}
+                        onClick={() => setOpen((o) => !o)}
+                    >
+                        <ChevronRight
+                            size={12}
+                            style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s ease' }}
+                        />
+                        {open ? 'Hide' : 'Show'} per-core usage
+                    </button>
+                    {open && (
+                        <div className="server-cores">
+                            {perCore.map((p, i) => (
+                                <div className="server-core" key={i}>
+                                    <span className="server-core-label">#{i}</span>
+                                    <div className="server-core-track">
+                                        <div
+                                            className="server-core-fill"
+                                            style={{ width: `${Math.min(100, p)}%`, background: barColor(p) }}
+                                        />
+                                    </div>
+                                    <span className="server-core-pct">{p.toFixed(0)}%</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </>
+            )}
         </div>
     );
 }
@@ -103,12 +171,7 @@ export default function ServerStatsWidget() {
                 </div>
             ) : (
                 <div className="server-stats-grid">
-                    <StatGauge
-                        icon={<Cpu size={14} />}
-                        label="CPU"
-                        percent={stats.cpu.usedPercent}
-                        detail={`${stats.cpu.cores} cores · load ${stats.cpu.loadAvg.map((l) => l.toFixed(2)).join(' / ')}`}
-                    />
+                    <CpuGauge cpu={stats.cpu} />
                     <StatGauge
                         icon={<MemoryStick size={14} />}
                         label="Memory"
@@ -121,6 +184,18 @@ export default function ServerStatsWidget() {
                         percent={stats.disk.usedPercent}
                         detail={`${formatBytes(stats.disk.used)} / ${formatBytes(stats.disk.total)} · ${stats.disk.mount}`}
                     />
+                    <div className="server-net">
+                        <span className="server-net-item">
+                            <ArrowDown size={14} style={{ color: 'var(--status-running)' }} />
+                            <span className="server-net-label">Inbound</span>
+                            <span className="server-net-value">{formatRate(stats.network.rxBytesPerSec)}</span>
+                        </span>
+                        <span className="server-net-item">
+                            <ArrowUp size={14} style={{ color: '#3b82f6' }} />
+                            <span className="server-net-label">Outbound</span>
+                            <span className="server-net-value">{formatRate(stats.network.txBytesPerSec)}</span>
+                        </span>
+                    </div>
                 </div>
             )}
         </div>

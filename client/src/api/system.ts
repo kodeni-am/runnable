@@ -9,6 +9,7 @@ export interface SystemStats {
         cores: number;
         model: string;
         loadAvg: number[];
+        perCore: number[];
     };
     memory: {
         total: number;
@@ -22,6 +23,10 @@ export interface SystemStats {
         free: number;
         usedPercent: number;
         mount: string;
+    };
+    network: {
+        rxBytesPerSec: number;
+        txBytesPerSec: number;
     };
     timestamp: string;
 }

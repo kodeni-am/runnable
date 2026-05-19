@@ -1574,3 +1574,90 @@ body {
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+.server-stat-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  transition: color 0.15s ease;
+}
+
+.server-stat-toggle:hover {
+  color: var(--text-primary);
+}
+
+.server-cores {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.server-core {
+  display: grid;
+  grid-template-columns: 28px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+.server-core-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.server-core-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.server-core-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease, background 0.3s ease;
+}
+
+.server-core-pct {
+  font-size: 11px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.server-net {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.server-net-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.server-net-label {
+  color: var(--text-secondary);
+}
+
+.server-net-value {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
