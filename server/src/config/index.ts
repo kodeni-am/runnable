@@ -1,5 +1,10 @@
 import dotenv from 'dotenv';
-dotenv.config({ path: '../.env' });
+import path from 'path';
+
+// Absolute path to the .env file, resolved once so it can be both loaded
+// and (when ADMIN_PASSWORD_RESET is used) rewritten by the server.
+export const envPath = path.resolve(process.cwd(), '../.env');
+dotenv.config({ path: envPath });
 
 export const config = {
     port: parseInt(process.env.PORT || '3001', 10),
@@ -9,6 +14,8 @@ export const config = {
         email: process.env.ADMIN_EMAIL || 'admin@localhost',
         username: process.env.ADMIN_USERNAME || 'admin',
         password: process.env.ADMIN_PASSWORD || 'admin_password_change_me',
+        // One-shot opt-in to reset the admin password from .env on next boot.
+        passwordReset: process.env.ADMIN_PASSWORD_RESET === 'true',
     },
 
     database: {
