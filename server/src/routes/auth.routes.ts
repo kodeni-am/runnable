@@ -228,6 +228,21 @@ router.post('/change-password', authLimiter, authenticate, async (req: AuthReque
     }
 });
 
+// Change email
+router.post('/change-email', authLimiter, authenticate, async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const { currentPassword, newEmail } = req.body;
+        if (!newEmail) {
+            res.status(400).json({ error: 'New email is required' });
+            return;
+        }
+        const user = await AuthService.changeEmail(req.user!.id, currentPassword || '', newEmail);
+        res.json({ message: 'Email updated', email: user.email });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // GitHub OAuth
 router.get('/github', (req: Request, res: Response, next: NextFunction) => {
     // Pass accessToken cookie (for linking) and redirect path in state

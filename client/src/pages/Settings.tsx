@@ -7,7 +7,7 @@ import { authApi } from '../api/auth';
 
 export default function Settings() {
     usePageTitle('Settings');
-    const { user } = useAuthStore();
+    const { user, updateUser } = useAuthStore();
 
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
@@ -15,6 +15,30 @@ export default function Settings() {
     const [pwError, setPwError] = useState('');
     const [pwSuccess, setPwSuccess] = useState('');
     const [pwLoading, setPwLoading] = useState(false);
+
+    const [emailPassword, setEmailPassword] = useState('');
+    const [newEmail, setNewEmail] = useState('');
+    const [emailError, setEmailError] = useState('');
+    const [emailSuccess, setEmailSuccess] = useState('');
+    const [emailLoading, setEmailLoading] = useState(false);
+
+    const handleChangeEmail = async (e: FormEvent) => {
+        e.preventDefault();
+        setEmailError('');
+        setEmailSuccess('');
+        setEmailLoading(true);
+        try {
+            const { data } = await authApi.changeEmail({ currentPassword: emailPassword, newEmail });
+            updateUser({ email: data.email });
+            setEmailSuccess('Email updated successfully');
+            setEmailPassword('');
+            setNewEmail('');
+        } catch (err: any) {
+            setEmailError(err.response?.data?.error || 'Failed to update email');
+        } finally {
+            setEmailLoading(false);
+        }
+    };
 
     const handleChangePassword = async (e: FormEvent) => {
         e.preventDefault();
@@ -56,6 +80,40 @@ export default function Settings() {
                     <div className="info-card glass">
                         <div className="info-card-label"><Key size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />Role</div>
                         <div className="info-card-value" style={{ textTransform: 'uppercase' }}>{user?.role || '—'}</div>
+                    </div>
+                </div>
+
+                <div style={{ marginTop: 32 }}>
+                    <h3 style={{ marginBottom: 16 }}>Change Email</h3>
+                    <div className="info-card glass" style={{ maxWidth: 420 }}>
+                        {emailError && <div className="alert alert-error">{emailError}</div>}
+                        {emailSuccess && <div className="alert alert-success">{emailSuccess}</div>}
+                        <form onSubmit={handleChangeEmail}>
+                            <div className="form-group">
+                                <label>New Email</label>
+                                <input
+                                    type="email"
+                                    className="form-input"
+                                    placeholder="you@example.com"
+                                    value={newEmail}
+                                    onChange={(e) => setNewEmail(e.target.value)}
+                                    required
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>Current Password</label>
+                                <input
+                                    type="password"
+                                    className="form-input"
+                                    placeholder="••••••••"
+                                    value={emailPassword}
+                                    onChange={(e) => setEmailPassword(e.target.value)}
+                                />
+                            </div>
+                            <button type="submit" className="btn btn-primary" disabled={emailLoading}>
+                                {emailLoading ? <span className="spinner" /> : 'Update Email'}
+                            </button>
+                        </form>
                     </div>
                 </div>
 

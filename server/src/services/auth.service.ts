@@ -68,6 +68,40 @@ export class AuthService {
         await userRepo().save(user);
     }
 
+    static async changeEmail(userId: string, currentPassword: string, newEmail: string): Promise<User> {
+        const email = (newEmail || '').trim();
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            throw new AppError('A valid email address is required', 400);
+        }
+
+        const user = await userRepo().findOne({ where: { id: userId } });
+        if (!user) {
+            throw new AppError('User not found', 404);
+        }
+
+        if (email === user.email) {
+            throw new AppError('That is already your email address', 400);
+        }
+
+        // Verify the current password for password-based accounts.
+        // OAuth-only accounts (no password) are allowed to change without one.
+        if (user.passwordHash) {
+            const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+            if (!isValid) {
+                throw new AppError('Current password is incorrect', 401);
+            }
+        }
+
+        const existing = await userRepo().findOne({ where: { email } });
+        if (existing) {
+            throw new AppError('That email address is already in use', 409);
+        }
+
+        user.email = email;
+        await userRepo().save(user);
+        return user;
+    }
+
     static async findOrCreateOAuthUser(profile: {
         provider: 'github' | 'google';
         id: string;
