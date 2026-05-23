@@ -109,7 +109,8 @@ export class SandboxService {
 
         try {
             // Create dedicated user (using execFile — no shell, no injection)
-            await execFileAsync('sudo', ['-n', 'useradd', '-r', '-M', '-d', directoryPath, '-s', '/usr/sbin/nologin', sandboxUser]);
+            // -G docker so the sandbox user can reach /var/run/docker.sock (mode 0660 root:docker on modern Docker)
+            await execFileAsync('sudo', ['-n', 'useradd', '-r', '-M', '-d', directoryPath, '-s', '/usr/sbin/nologin', '-G', 'docker', sandboxUser]);
 
             // Create directory with proper ownership
             await fs.mkdir(directoryPath, { recursive: true });
