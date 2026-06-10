@@ -571,6 +571,20 @@ export default function ProjectDetail() {
                                                 </span>
                                             )}
                                         </div>
+                                        {!d.verified && (
+                                            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border, rgba(255,255,255,0.1))', fontSize: 12, color: 'var(--text-muted)' }}>
+                                                <div style={{ marginBottom: 6 }}>To verify, add <strong>one</strong> of these DNS records, then click Verify:</div>
+                                                <div style={{ fontFamily: 'monospace', whiteSpace: 'nowrap', overflowX: 'auto' }}>
+                                                    CNAME&nbsp;&nbsp;{d.domain} → {p.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}
+                                                </div>
+                                                <div style={{ fontFamily: 'monospace', whiteSpace: 'nowrap', overflowX: 'auto' }}>
+                                                    TXT&nbsp;&nbsp;&nbsp;&nbsp;_runnable-verify.{d.domain} → {p.id}
+                                                </div>
+                                                <div style={{ marginTop: 6 }}>
+                                                    Root domains (e.g. <code>{d.domain.replace(/^www\./, '')}</code>) can't have a CNAME — use the TXT record, plus an A record pointing the domain at this server so traffic reaches it.
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                     {canEditDomains && (
                                         <div style={{ display: 'flex', gap: 8 }}>
@@ -640,7 +654,7 @@ export default function ProjectDetail() {
                                         <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>If set, traffic to this domain will redirect to the target domain.</p>
                                     </div>
                                     <div className="alert alert-info">
-                                        After adding, you'll need to set up a CNAME record pointing to <strong>{p.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}</strong>
+                                        After adding, you'll need to verify ownership with a CNAME record pointing to <strong>{p.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}</strong> — or, for root domains (which can't have a CNAME), a TXT record. Exact records will be shown next to the domain.
                                     </div>
                                     <div className="modal-actions">
                                         <button className="btn btn-secondary" onClick={() => setShowAddDomain(false)}>Cancel</button>
