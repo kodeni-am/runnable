@@ -126,22 +126,23 @@ export class GithubService {
         });
 
         if (!project || !project.githubRepo) return;
+        const githubRepo = project.githubRepo;
 
         // Update status to deploying
         project.status = ServiceStatus.DEPLOYING;
         await projectRepo.save(project);
 
         try {
-            // Pull latest changes from the branch this project is tracking
-            await GithubService.pullLatest(projectId, project.directoryPath, project.githubRepo.branch);
+            // Pull + restart as one unit under the project lock, so a push
+            // arriving mid-build can't reset the working tree under the build
+            // or spawn a second concurrent one.
+            await ProcessService.redeploy(projectId, async () => {
+                await GithubService.pullLatest(projectId, project.directoryPath, githubRepo.branch);
 
-            // Update last deploy timestamp
-            const repoRepo = AppDataSource.getRepository(GithubRepo);
-            project.githubRepo.lastDeployAt = new Date();
-            await repoRepo.save(project.githubRepo);
-
-            // Restart the service
-            await ProcessService.restart(projectId);
+                const repoRepo = AppDataSource.getRepository(GithubRepo);
+                githubRepo.lastDeployAt = new Date();
+                await repoRepo.save(githubRepo);
+            });
         } catch (error) {
             project.status = ServiceStatus.ERROR;
             await projectRepo.save(project);

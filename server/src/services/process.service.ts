@@ -23,7 +23,30 @@ export class ProcessService {
         ProcessService.io = io;
     }
 
-    static async start(projectId: string): Promise<void> {
+    // Lifecycle ops (start/stop/restart/redeploy) for the same project must
+    // never overlap: a second build racing the first deadlocks buildkit, and
+    // a webhook's `git reset --hard` corrupts a build that is copying the
+    // working tree. Ops queue per project; other projects are unaffected.
+    private static readonly projectLocks = new Map<string, Promise<unknown>>();
+    private static readonly queuedRedeploys = new Set<string>();
+
+    private static withProjectLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+        const prev = ProcessService.projectLocks.get(projectId) ?? Promise.resolve();
+        const next = prev.catch(() => { }).then(fn);
+        ProcessService.projectLocks.set(projectId, next);
+        next.finally(() => {
+            if (ProcessService.projectLocks.get(projectId) === next) {
+                ProcessService.projectLocks.delete(projectId);
+            }
+        }).catch(() => { });
+        return next;
+    }
+
+    static start(projectId: string): Promise<void> {
+        return ProcessService.withProjectLock(projectId, () => ProcessService.doStart(projectId));
+    }
+
+    private static async doStart(projectId: string): Promise<void> {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
@@ -335,7 +358,11 @@ export class ProcessService {
         ProcessService.emitStatus(projectId, ServiceStatus.RUNNING);
     }
 
-    static async stop(projectId: string): Promise<void> {
+    static stop(projectId: string): Promise<void> {
+        return ProcessService.withProjectLock(projectId, () => ProcessService.doStop(projectId));
+    }
+
+    private static async doStop(projectId: string): Promise<void> {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({ where: { id: projectId } });
 
@@ -400,9 +427,29 @@ export class ProcessService {
         await SandboxService.exec(projectId, 'docker', ['rmi', '-f', imageName]).catch(() => {});
     }
 
-    static async restart(projectId: string): Promise<void> {
-        await ProcessService.stop(projectId);
-        await ProcessService.start(projectId);
+    static restart(projectId: string): Promise<void> {
+        return ProcessService.withProjectLock(projectId, async () => {
+            await ProcessService.doStop(projectId);
+            await ProcessService.doStart(projectId);
+        });
+    }
+
+    /**
+     * Pull-and-restart as one serialized unit. `prepare` (e.g. git pull) runs
+     * inside the project lock so it cannot mutate the working tree while an
+     * in-flight build is copying it. Bursts coalesce: if a redeploy is already
+     * queued behind a running one, new requests are dropped — the queued run
+     * pulls the latest code anyway.
+     */
+    static redeploy(projectId: string, prepare: () => Promise<void>): Promise<void> {
+        if (ProcessService.queuedRedeploys.has(projectId)) return Promise.resolve();
+        ProcessService.queuedRedeploys.add(projectId);
+        return ProcessService.withProjectLock(projectId, async () => {
+            ProcessService.queuedRedeploys.delete(projectId);
+            await prepare();
+            await ProcessService.doStop(projectId);
+            await ProcessService.doStart(projectId);
+        });
     }
 
     static async getStatus(projectId: string): Promise<ServiceStatus> {
