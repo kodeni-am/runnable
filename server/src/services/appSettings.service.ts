@@ -11,17 +11,22 @@ export class AppSettingsService {
         const repo = settingsRepo();
         let row = await repo.findOneBy({ id: 'global' });
         if (!row) {
-            row = repo.create({
-                id: 'global',
-                baseDomain: config.hosting.baseDomain,
-                servDir: config.hosting.servDir,
-            });
-            await repo.save(row);
+            // Upsert: two concurrent first calls must not race to a duplicate-
+            // key error on the singleton row.
+            await repo.upsert(
+                {
+                    id: 'global',
+                    baseDomain: config.hosting.baseDomain,
+                    servDir: config.hosting.servDir,
+                },
+                { conflictPaths: ['id'], skipUpdateIfNoValuesChanged: true },
+            );
+            row = (await repo.findOneBy({ id: 'global' }))!;
         }
         return row;
     }
 
-    static async update(partial: Partial<Pick<AppSettings, 'buildCacheKeepGB' | 'maxUploadSizeMB' | 'baseDomain'>>): Promise<AppSettings> {
+    static async update(partial: Partial<Pick<AppSettings, 'buildCacheKeepGB'>>): Promise<AppSettings> {
         const repo = settingsRepo();
         const row = await AppSettingsService.get();
         Object.assign(row, partial);
