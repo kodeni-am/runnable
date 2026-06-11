@@ -392,10 +392,9 @@ export class ProcessService {
                 await SandboxService.exec(projectId, 'docker', ['rm', '-f', project.containerId]);
             }
             project.containerId = undefined;
-            // Revert the port to internalPort
-            if (project.internalPort) {
-                project.port = project.internalPort;
-            }
+            // Revert the port from the dynamic host port to the container port
+            // so a later config regeneration doesn't proxy to a stale port
+            project.port = project.internalPort || 8080;
         }
 
         // Remove config
@@ -431,6 +430,23 @@ export class ProcessService {
         return ProcessService.withProjectLock(projectId, async () => {
             await ProcessService.doStop(projectId);
             await ProcessService.doStart(projectId);
+        });
+    }
+
+    /**
+     * Restart used by the health monitor. Re-checks the status once inside
+     * the lock: if it's no longer ERROR (user stopped the project, or a
+     * redeploy got there first), the restart is skipped. Returns whether a
+     * restart actually ran.
+     */
+    static restartIfStillError(projectId: string): Promise<boolean> {
+        return ProcessService.withProjectLock(projectId, async () => {
+            const projectRepo = AppDataSource.getRepository(Project);
+            const project = await projectRepo.findOne({ where: { id: projectId } });
+            if (!project || project.status !== ServiceStatus.ERROR) return false;
+            await ProcessService.doStop(projectId);
+            await ProcessService.doStart(projectId);
+            return true;
         });
     }
 
@@ -650,9 +666,13 @@ export class ProcessService {
         return logs ? logs.split('\n').filter(Boolean) : ['No logs available'];
     }
 
-    private static emitStatus(projectId: string, status: ServiceStatus) {
+    /**
+     * Emit a status update to clients subscribed to this project's room.
+     * Public so the health monitor can surface crash detections live.
+     */
+    static emitStatus(projectId: string, status: ServiceStatus) {
         if (ProcessService.io) {
-            ProcessService.io.emit('service:status', { projectId, status });
+            ProcessService.io.to(`project:${projectId}`).emit('service:status', { projectId, status });
         }
     }
 }

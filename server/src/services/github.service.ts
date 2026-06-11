@@ -4,6 +4,7 @@ import { AppDataSource } from '../config/data-source';
 import { GithubRepo, Project, ServiceStatus, Deployment } from '../entities';
 import type { DeploymentStatus, DeploymentTrigger } from '../entities/Deployment';
 import { ProcessService } from './process.service';
+import { NotificationService } from './notification.service';
 import { AppError } from '../middleware/errorHandler';
 import { config } from '../config';
 
@@ -183,6 +184,13 @@ export class GithubService {
                     commitSha: deployed.sha,
                     commitMessage: deployed.message,
                 });
+                await NotificationService.notify(project, {
+                    event: 'deploy.success',
+                    title: `${project.name} deployed`,
+                    message: deployed.message || 'Deployed latest push',
+                    success: true,
+                    meta: { branch: githubRepo.branch, commit: deployed.sha?.slice(0, 7) },
+                });
             }
         } catch (error: any) {
             // Update only the status — doStop/doStart persisted fresh
@@ -196,6 +204,13 @@ export class GithubService {
                 commitMessage: deployed.message,
                 error: error?.message,
             }).catch(() => { });
+            await NotificationService.notify(project, {
+                event: 'deploy.failed',
+                title: `${project.name} deploy failed`,
+                message: error?.message || 'Deployment failed',
+                success: false,
+                meta: { branch: githubRepo.branch, commit: deployed.sha?.slice(0, 7) },
+            });
             throw error;
         }
     }
@@ -264,13 +279,21 @@ export class GithubService {
                 }
             });
 
-            return await GithubService.recordDeployment(projectId, {
+            const recorded = await GithubService.recordDeployment(projectId, {
                 status: 'success',
                 trigger: 'rollback',
                 branch: project.githubRepo.branch,
                 commitSha,
                 commitMessage: target.commitMessage,
             });
+            await NotificationService.notify(project, {
+                event: 'rollback.success',
+                title: `${project.name} rolled back`,
+                message: target.commitMessage || 'Rolled back to previous deployment',
+                success: true,
+                meta: { branch: project.githubRepo.branch, commit: commitSha.slice(0, 7) },
+            });
+            return recorded;
         } catch (error: any) {
             // Update only the status — doStop/doStart persisted fresh
             // containerId/port values that this stale entity must not overwrite.
@@ -283,6 +306,13 @@ export class GithubService {
                 commitMessage: target.commitMessage,
                 error: error?.message,
             }).catch(() => { });
+            await NotificationService.notify(project, {
+                event: 'rollback.failed',
+                title: `${project.name} rollback failed`,
+                message: error?.message || 'Rollback failed',
+                success: false,
+                meta: { branch: project.githubRepo.branch, commit: commitSha.slice(0, 7) },
+            });
             throw error;
         }
     }

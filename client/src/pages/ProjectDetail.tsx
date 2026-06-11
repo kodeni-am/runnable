@@ -76,6 +76,9 @@ export default function ProjectDetail() {
     const [composeFile, setComposeFile] = useState('docker-compose.yml');
     const [composeService, setComposeService] = useState('');
     const [internalPort, setInternalPort] = useState<string>('');
+    // Notifications & health
+    const [notificationWebhookUrl, setNotificationWebhookUrl] = useState('');
+    const [autoRestart, setAutoRestart] = useState(false);
 
     // Collaborator state
     const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -118,6 +121,8 @@ export default function ProjectDetail() {
                     setComposeFile(p.composeFile || 'docker-compose.yml');
                     setComposeService(p.composeService || '');
                     setInternalPort(p.internalPort != null ? String(p.internalPort) : '');
+                    setNotificationWebhookUrl(p.notificationWebhookUrl || '');
+                    setAutoRestart(p.autoRestart || false);
                 }
             });
         }
@@ -291,6 +296,8 @@ export default function ProjectDetail() {
                 composeFile: composeFile || 'docker-compose.yml',
                 composeService,
                 internalPort: parsedPort ?? null,
+                notificationWebhookUrl: notificationWebhookUrl.trim() || null,
+                autoRestart,
             });
             const refreshed = await fetchProject(id);
             if (refreshed) {
@@ -892,6 +899,39 @@ export default function ProjectDetail() {
                                     )}
                                 </div>
                             )}
+
+                            {/* ── NOTIFICATIONS & HEALTH ───────────────────────────── */}
+                            <div style={{ marginTop: 24, marginBottom: 24, padding: '16px 20px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
+                                <label style={{ fontWeight: 600, fontSize: 14, display: 'block', marginBottom: 16 }}>Notifications &amp; Health</label>
+                                <div className="form-group" style={{ marginBottom: 12 }}>
+                                    <label style={{ fontSize: 13 }}>Notification Webhook URL</label>
+                                    <input
+                                        className="form-input"
+                                        placeholder="https://discord.com/api/webhooks/... or https://hooks.slack.com/..."
+                                        value={notificationWebhookUrl}
+                                        onChange={(e) => setNotificationWebhookUrl(e.target.value)}
+                                        disabled={!canEditConfig}
+                                    />
+                                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                        Notified on deploy success/failure, rollbacks, and health events. Discord and Slack URLs get native formatting; other URLs receive a JSON payload.
+                                    </p>
+                                </div>
+                                {p.serverType === 'app' && (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 0 }}>
+                                        <label style={{ fontSize: 13, margin: 0 }}>Auto-restart on crash</label>
+                                        <input
+                                            type="checkbox"
+                                            checked={autoRestart}
+                                            onChange={(e) => setAutoRestart(e.target.checked)}
+                                            disabled={!canEditConfig}
+                                            style={{ width: 16, height: 16, cursor: canEditConfig ? 'pointer' : 'default' }}
+                                        />
+                                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                            Restart the container automatically if the health monitor finds it dead (max 3 restarts/hour)
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
 
                             <div className="form-group">
                                 <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

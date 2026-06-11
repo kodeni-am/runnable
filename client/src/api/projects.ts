@@ -48,6 +48,8 @@ export interface Project {
     useCompose?: boolean;
     composeFile?: string;
     composeService?: string;
+    notificationWebhookUrl?: string | null;
+    autoRestart?: boolean;
     userId: string;
     githubRepo?: {
         id: string;

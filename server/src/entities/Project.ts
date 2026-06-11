@@ -73,6 +73,18 @@ export class Project {
     @Column({ nullable: true })
     composeService?: string;
 
+    /**
+     * Optional webhook URL notified on deploy success/failure, rollbacks, and
+     * health events. Discord and Slack webhook URLs get their native payload
+     * shape; anything else receives a generic JSON event.
+     */
+    @Column({ nullable: true })
+    notificationWebhookUrl?: string;
+
+    /** Restart the container automatically when the health monitor finds it dead */
+    @Column({ default: false })
+    autoRestart: boolean;
+
     @ManyToOne(() => User, (user) => user.projects, { onDelete: 'CASCADE' })
     user: User;
 

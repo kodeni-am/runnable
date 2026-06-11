@@ -4,12 +4,13 @@ import path from 'path';
 import { AppDataSource } from '../config/data-source';
 import { Project, ServerType, ServiceStatus, User, Role, ProjectCollaborator } from '../entities';
 import { ProjectPermission } from '../entities/enums';
-import { DEFAULT_PROJECT_PERMISSIONS } from '../entities/ProjectCollaborator';
+import { DEFAULT_PROJECT_PERMISSIONS, sanitizeProjectPermissions } from '../entities/ProjectCollaborator';
 import { DEFAULT_USER_PERMISSIONS } from '../entities/User';
 import { authenticate, requireApproval, requireProjectAccess, AuthRequest } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { SandboxService } from '../services/sandbox.service';
 import { ProcessService } from '../services/process.service';
+import { HealthMonitorService } from '../services/healthMonitor.service';
 import { ServerConfigService } from '../services/serverConfig.service';
 import { GithubService } from '../services/github.service';
 import { config } from '../config';
@@ -148,12 +149,31 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
         const project = (req as any).project as Project;
 
         const { name, serverType, buildCommand, startCommand, envVars, port, internalPort,
-                useCompose, composeFile, composeService } = req.body;
+                useCompose, composeFile, composeService, notificationWebhookUrl, autoRestart } = req.body;
         if (name) project.name = name;
         if (serverType) project.serverType = serverType as ServerType;
         if (buildCommand !== undefined) project.buildCommand = buildCommand;
         if (startCommand !== undefined) project.startCommand = startCommand;
-        if (envVars !== undefined) project.envVars = envVars;
+        if (envVars !== undefined) {
+            // Must be a flat string→string object: anything else either breaks
+            // doStart's parsing or produces junk docker -e args.
+            if (envVars === null) {
+                // undefined would be skipped by TypeORM's save — null actually clears the column
+                project.envVars = null as any;
+            } else {
+                if (typeof envVars !== 'object' || Array.isArray(envVars)) {
+                    throw new AppError('envVars must be an object of string values', 400);
+                }
+                const clean: Record<string, string> = {};
+                for (const [key, value] of Object.entries(envVars)) {
+                    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+                        throw new AppError(`envVars.${key} must be a string`, 400);
+                    }
+                    clean[key] = String(value);
+                }
+                project.envVars = clean;
+            }
+        }
         if (port !== undefined) project.port = port;
         if (internalPort !== undefined) {
             if (internalPort === null) {
@@ -167,9 +187,39 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
                 project.internalPort = n;
             }
         }
-        if (useCompose !== undefined) project.useCompose = useCompose;
-        if (composeFile !== undefined) project.composeFile = composeFile;
-        if (composeService !== undefined) project.composeService = composeService;
+        if (useCompose !== undefined) project.useCompose = Boolean(useCompose);
+        if (composeFile !== undefined) {
+            if (composeFile) {
+                // The compose file must stay inside the project directory —
+                // it's passed to `docker compose -f` with the project as cwd.
+                const resolved = path.resolve(project.directoryPath, String(composeFile));
+                if (resolved !== path.resolve(project.directoryPath)
+                    && !resolved.startsWith(path.resolve(project.directoryPath) + path.sep)) {
+                    throw new AppError('composeFile must be a path inside the project directory', 400);
+                }
+            }
+            project.composeFile = composeFile;
+        }
+        if (composeService !== undefined) {
+            if (composeService && !/^[a-zA-Z0-9._-]+$/.test(String(composeService))) {
+                throw new AppError('composeService must be a valid compose service name', 400);
+            }
+            project.composeService = composeService;
+        }
+        if (notificationWebhookUrl !== undefined) {
+            if (notificationWebhookUrl === null || notificationWebhookUrl === '') {
+                project.notificationWebhookUrl = null as any;
+            } else {
+                try {
+                    const parsed = new URL(String(notificationWebhookUrl));
+                    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error();
+                } catch {
+                    throw new AppError('notificationWebhookUrl must be a valid http(s) URL', 400);
+                }
+                project.notificationWebhookUrl = String(notificationWebhookUrl);
+            }
+        }
+        if (autoRestart !== undefined) project.autoRestart = Boolean(autoRestart);
 
         const projectRepo = AppDataSource.getRepository(Project);
         await projectRepo.save(project);
@@ -240,6 +290,7 @@ router.post('/:id/start', requireProjectAccess(ProjectPermission.CAN_START), asy
     try {
         const project = (req as any).project as Project;
         await ProcessService.start(project.id);
+        HealthMonitorService.reset(project.id);
         res.json({ status: 'running' });
     } catch (error) {
         next(error);
@@ -250,6 +301,7 @@ router.post('/:id/stop', requireProjectAccess(ProjectPermission.CAN_START), asyn
     try {
         const project = (req as any).project as Project;
         await ProcessService.stop(project.id);
+        HealthMonitorService.reset(project.id);
         res.json({ status: 'stopped' });
     } catch (error) {
         next(error);
@@ -260,6 +312,7 @@ router.post('/:id/restart', requireProjectAccess(ProjectPermission.CAN_START), a
     try {
         const project = (req as any).project as Project;
         await ProcessService.restart(project.id);
+        HealthMonitorService.reset(project.id);
         res.json({ status: 'running' });
     } catch (error) {
         next(error);
@@ -422,7 +475,7 @@ router.post('/:id/collaborators', requireProjectAccess(), async (req: AuthReques
         const collab = collabRepo.create({
             userId: targetUser.id,
             projectId: project.id,
-            permissions: permissions ?? DEFAULT_PROJECT_PERMISSIONS,
+            permissions: permissions ? sanitizeProjectPermissions(permissions) : DEFAULT_PROJECT_PERMISSIONS,
         });
 
         await collabRepo.save(collab);
@@ -465,7 +518,7 @@ router.put('/:id/collaborators/:userId', requireProjectAccess(), async (req: Aut
             throw new AppError('Collaborator not found', 404);
         }
 
-        collab.permissions = permissions;
+        collab.permissions = sanitizeProjectPermissions(permissions);
         await collabRepo.save(collab);
 
         res.json({

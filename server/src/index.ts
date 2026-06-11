@@ -7,12 +7,18 @@ import passport from 'passport';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { readFileSync, writeFileSync } from 'fs';
+import jwt from 'jsonwebtoken';
+import { In } from 'typeorm';
 import { AppDataSource } from './config/data-source';
 import { config, envPath } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { ProcessService } from './services/process.service';
+import { HealthMonitorService } from './services/healthMonitor.service';
 import { User } from './entities/User';
-import { Role } from './entities/enums';
+import { Project } from './entities/Project';
+import { ProjectCollaborator } from './entities/ProjectCollaborator';
+import { Role, ServiceStatus } from './entities/enums';
+import type { JwtPayload } from './middleware/auth';
 import bcrypt from 'bcryptjs';
 
 // Routes
@@ -85,6 +91,23 @@ async function bootstrap() {
         process.exit(1);
     }
 
+    // Reconcile state from a previous crash: a project stuck in BUILDING or
+    // DEPLOYING has no build actually running anymore. RUNNING projects are
+    // left alone — their containers survive restarts (--restart unless-stopped)
+    // and the health monitor flags any that died.
+    try {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const stuck = await projectRepo.update(
+            { status: In([ServiceStatus.BUILDING, ServiceStatus.DEPLOYING]) },
+            { status: ServiceStatus.ERROR },
+        );
+        if (stuck.affected) {
+            console.warn(`⚠️  Reset ${stuck.affected} project(s) stuck in BUILDING/DEPLOYING from a previous run`);
+        }
+    } catch (error) {
+        console.error('Failed to reconcile project statuses:', error);
+    }
+
     const app = express();
     const httpServer = createServer(app);
 
@@ -98,8 +121,54 @@ async function bootstrap() {
 
     ProcessService.setSocketIO(io);
 
+    // Authenticate the socket handshake with the same JWT cookie the REST API
+    // uses — without this, anyone who can reach the port receives every
+    // tenant's project status events.
+    io.use((socket, next) => {
+        try {
+            const raw = socket.handshake.headers.cookie || '';
+            const match = raw.match(/(?:^|;\s*)accessToken=([^;]+)/);
+            const token = match ? decodeURIComponent(match[1]) : null;
+            if (!token) return next(new Error('unauthorized'));
+            const decoded = jwt.verify(token, config.jwt.secret) as JwtPayload;
+            socket.data.userId = decoded.userId;
+            socket.data.role = decoded.role;
+            next();
+        } catch {
+            next(new Error('unauthorized'));
+        }
+    });
+
     io.on('connection', (socket) => {
         console.log(`🔌 Client connected: ${socket.id}`);
+
+        // Status events are scoped to project rooms; clients subscribe to the
+        // projects they can access.
+        socket.on('subscribe', async (projectId: unknown) => {
+            try {
+                if (typeof projectId !== 'string') return;
+                const project = await AppDataSource.getRepository(Project).findOne({ where: { id: projectId } });
+                if (!project) return;
+
+                const isOwner = project.userId === socket.data.userId;
+                const isAdmin = socket.data.role === Role.ADMIN;
+                let allowed = isOwner || isAdmin;
+                if (!allowed) {
+                    const collab = await AppDataSource.getRepository(ProjectCollaborator).findOne({
+                        where: { userId: socket.data.userId, projectId },
+                    });
+                    allowed = !!collab;
+                }
+                if (allowed) socket.join(`project:${projectId}`);
+            } catch {
+                // Subscription failures are non-fatal — the client just gets no live updates
+            }
+        });
+
+        socket.on('unsubscribe', (projectId: unknown) => {
+            if (typeof projectId === 'string') socket.leave(`project:${projectId}`);
+        });
+
         socket.on('disconnect', () => {
             console.log(`🔌 Client disconnected: ${socket.id}`);
         });
@@ -147,10 +216,16 @@ async function bootstrap() {
         console.log(`📡 Environment: ${config.nodeEnv}`);
     });
 
+    // Watch running app containers; notifies + optionally restarts on crash
+    HealthMonitorService.start();
+
     // Graceful shutdown
     const shutdown = async () => {
         console.log('\n🛑 Shutting down...');
+        HealthMonitorService.stop();
         io.close();
+        // Let in-flight HTTP requests finish before tearing down the DB
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
         await AppDataSource.destroy();
         process.exit(0);
     };
@@ -159,4 +234,7 @@ async function bootstrap() {
     process.on('SIGINT', shutdown);
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+    console.error('❌ Fatal startup error:', error);
+    process.exit(1);
+});
