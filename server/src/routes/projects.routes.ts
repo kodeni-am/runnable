@@ -13,8 +13,8 @@ import { SandboxService } from '../services/sandbox.service';
 import { ProcessService } from '../services/process.service';
 import { HealthMonitorService } from '../services/healthMonitor.service';
 import { ServerConfigService } from '../services/serverConfig.service';
-import { GithubService } from '../services/github.service';
 import { ProjectProvisioningService } from '../services/projectProvisioning.service';
+import { ProjectTeardownService } from '../services/projectTeardown.service';
 import { getTemplate } from '../templates/catalog';
 import { config } from '../config';
 
@@ -254,52 +254,7 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
 router.delete('/:id', requireProjectAccess(ProjectPermission.CAN_DELETE), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
-
-        // Tear down runtime resources: stop container/compose stack and remove
-        // the built Docker image. Done before destroySandbox since the image is
-        // owned by the sandbox user. Unconditional so leftover containers in
-        // non-RUNNING states (ERROR/BUILDING) are also cleaned up.
-        await ProcessService.destroy(project.id);
-
-        // Remove the GitHub webhook so it stops firing at our API. The
-        // githubRepo relation is eager-loaded by requireProjectAccess.
-        if (project.githubRepo?.webhookId && req.user!.githubToken) {
-            await GithubService.removeWebhook(
-                project.githubRepo.repoUrl,
-                req.user!.githubToken,
-                project.githubRepo.webhookId
-            ).catch(() => { });
-        }
-
-        // Remove config
-        if (project.configPath) {
-            await ServerConfigService.removeConfig(project.configPath);
-        }
-
-        // Destroy sandbox
-        await SandboxService.destroySandbox(project.id);
-
-        // Remove project directory (cloned repo, build artifacts, .runnable.env)
-        if (project.directoryPath) {
-            await fs.rm(project.directoryPath, { recursive: true, force: true }).catch(() => { });
-        }
-
-        // Remove log files (build log + reverse-proxy access/error logs).
-        // Paths mirror the creation sites in process.service / serverConfig.service.
-        const storageDir = path.resolve(config.hosting.servDir, '..');
-        const logFiles = [
-            path.join(storageDir, 'logs', `${project.subdomain}-build.log`),
-            path.join(storageDir, 'logs', `${project.subdomain}-access.log`),
-            path.join(storageDir, 'logs', `${project.subdomain}-error.log`),
-            path.resolve('./storage/logs', `${project.subdomain}-build.log`),
-            path.resolve('./storage/logs', `${project.subdomain}-access.log`),
-            path.resolve('./storage/logs', `${project.subdomain}-error.log`),
-            `/var/log/caddy/${project.subdomain}.log`,
-        ];
-        await Promise.all(logFiles.map(f => fs.rm(f, { force: true }).catch(() => { })));
-
-        const projectRepo = AppDataSource.getRepository(Project);
-        await projectRepo.remove(project);
+        await ProjectTeardownService.teardown(project, req.user!.githubToken || undefined);
         res.json({ message: 'Project deleted' });
     } catch (error) {
         next(error);
