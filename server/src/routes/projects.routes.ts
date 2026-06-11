@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { AppDataSource } from '../config/data-source';
-import { Project, ServerType, ServiceStatus, User, Role, ProjectCollaborator } from '../entities';
+import { Project, ServerType, User, Role, ProjectCollaborator } from '../entities';
 import { ProjectPermission } from '../entities/enums';
 import { DEFAULT_PROJECT_PERMISSIONS, sanitizeProjectPermissions } from '../entities/ProjectCollaborator';
 import { DEFAULT_USER_PERMISSIONS } from '../entities/User';
@@ -16,7 +16,6 @@ import { ServerConfigService } from '../services/serverConfig.service';
 import { ProjectProvisioningService } from '../services/projectProvisioning.service';
 import { ProjectTeardownService } from '../services/projectTeardown.service';
 import { getTemplate } from '../templates/catalog';
-import { config } from '../config';
 
 const router = Router();
 
