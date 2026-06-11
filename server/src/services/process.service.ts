@@ -739,7 +739,7 @@ export class ProcessService {
             const composeName = project.containerId!;
             const doc = await ProcessService.validateComposeAndWriteEnv(
                 project, userEnv, buildLogPath, composeName, composeFile);
-            const safety = assessParallelSafety(doc);
+            const safety = assessParallelSafety(doc, { composeProjectName: composeName });
 
             if (safety.safeToParallel) {
                 await fs.appendFile(buildLogPath, `Zero-downtime: blue-green (stack is safe to run twice)\n`);

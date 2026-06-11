@@ -20,7 +20,10 @@ export interface ParallelSafety {
  * - external or fixed-name networks (both stacks would join the same network
  *   with identical service aliases and DNS would round-robin across them)
  */
-export function assessParallelSafety(doc: any): ParallelSafety {
+export function assessParallelSafety(
+    doc: any,
+    opts?: { composeProjectName?: string },
+): ParallelSafety {
     const reasons: string[] = [];
     const services = (doc?.services && typeof doc.services === 'object') ? doc.services : {};
 
@@ -61,7 +64,15 @@ export function assessParallelSafety(doc: any): ParallelSafety {
         if (net.external) {
             reasons.push(`network "${name}" is external (would be shared by both stacks)`);
         } else if (net.name) {
-            reasons.push(`network "${name}" has a fixed name "${net.name}" (would be shared by both stacks)`);
+            // `docker compose config -p <project>` normalizes every network
+            // with an explicit name; the auto-derived "<project>_<key>" form
+            // follows the project name, so a parallel generation gets its own
+            // network — only a name that DOESN'T follow it is genuinely fixed.
+            const autoDerived = opts?.composeProjectName
+                && net.name === `${opts.composeProjectName}_${name}`;
+            if (!autoDerived) {
+                reasons.push(`network "${name}" has a fixed name "${net.name}" (would be shared by both stacks)`);
+            }
         }
     }
 

@@ -105,6 +105,25 @@ describe('assessParallelSafety', () => {
         expect(r.safeToParallel).toBe(true);
     });
 
+    it('allows the auto-derived default network name compose config emits', () => {
+        // `docker compose config -p runnable-6a51f19f` normalizes the default
+        // network to name "runnable-6a51f19f_default" — that name follows the
+        // project name, so a parallel generation gets its own network.
+        const r = assessParallelSafety({
+            services: { web: {} },
+            networks: { default: { name: 'runnable-6a51f19f_default' } },
+        }, { composeProjectName: 'runnable-6a51f19f' });
+        expect(r.safeToParallel).toBe(true);
+    });
+
+    it('still flags a genuinely fixed network name even with a project name given', () => {
+        const r = assessParallelSafety({
+            services: { web: {} },
+            networks: { internal: { name: 'shared-net' } },
+        }, { composeProjectName: 'runnable-6a51f19f' });
+        expect(r.safeToParallel).toBe(false);
+    });
+
     it('collects multiple reasons', () => {
         const r = assessParallelSafety({
             services: {
