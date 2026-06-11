@@ -86,7 +86,7 @@ export class GithubService {
             body: JSON.stringify({
                 name: 'web',
                 active: true,
-                events: ['push'],
+                events: ['push', 'pull_request'],
                 config: {
                     url: callbackUrl,
                     content_type: 'json',
@@ -103,6 +103,37 @@ export class GithubService {
 
         const data = await response.json() as any;
         return { webhookId: String(data.id), secret };
+    }
+
+    /**
+     * PATCH an existing webhook so it is subscribed to the given events. Used
+     * when previews are enabled on a repo whose webhook was created before
+     * preview support (push-only). Best-effort: throws only on a hard API error.
+     */
+    static async ensureWebhookEvents(
+        repoUrl: string,
+        token: string,
+        webhookId: string,
+        events: string[],
+    ): Promise<void> {
+        const match = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
+        if (!match) throw new Error('Invalid GitHub repo URL');
+        const [, owner, repo] = match;
+
+        const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks/${webhookId}`, {
+            method: 'PATCH',
+            headers: {
+                Authorization: `token ${token}`,
+                Accept: 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ events }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Failed to update webhook events: ${error}`);
+        }
     }
 
     static async removeWebhook(repoUrl: string, token: string, webhookId: string): Promise<void> {
