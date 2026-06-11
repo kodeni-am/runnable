@@ -184,6 +184,9 @@ cat > /etc/caddy/Caddyfile <<EOF
 
 # API server
 api.${DOMAIN} {
+    # /api/internal/* is server-internal (Caddy's on-demand-TLS ask hits it
+    # directly on localhost) — never expose it publicly.
+    respond /api/internal/* 403
     reverse_proxy localhost:3001
     encode gzip zstd
     log {
@@ -197,6 +200,9 @@ ${DOMAIN} {
 
     # Deterministic ordering — API/WebSocket MUST be matched before SPA fallback
     route {
+        # /api/internal/* is server-internal only — never expose it publicly
+        respond /api/internal/* 403
+
         # Proxy API to backend
         reverse_proxy /api/* localhost:3001
 
