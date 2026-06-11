@@ -8,6 +8,7 @@ import { SandboxService } from './sandbox.service';
 import { ServerConfigService } from './serverConfig.service';
 import { DetectService } from './detect.service';
 import { ComposePolicyService } from './composePolicy.service';
+import { BuildCacheService } from './buildCache.service';
 import { parse as parseYaml } from 'yaml';
 
 interface ManagedProcess {
@@ -406,6 +407,10 @@ export class ProcessService {
 
         // Emit status update
         ProcessService.emitStatus(projectId, ServiceStatus.RUNNING);
+
+        // Opportunistic build-cache GC. Fire-and-forget: enforceCap never
+        // throws, and a deploy must never wait on (or fail from) a prune.
+        void BuildCacheService.enforceCap();
     }
 
     static stop(projectId: string): Promise<void> {
