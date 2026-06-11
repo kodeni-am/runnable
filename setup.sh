@@ -14,6 +14,7 @@ set -euo pipefail
 DOMAIN=""
 ADMIN_EMAIL=""
 INSTALL_DIR="/opt/runnable"
+WEB_DIR="/var/www/runnable"
 REPO_URL=""
 BRANCH="main"
 DB_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)
@@ -116,7 +117,25 @@ systemctl enable postgresql
 systemctl start postgresql
 ok "PostgreSQL 16 installed"
 
-# Create database and user (always sync password on re-runs)
+# Detect an existing install — re-use its DB password and preserve its .env
+# (regenerating would wipe operator-filled OAuth keys and rotate JWT secrets)
+ENV_FILE="${INSTALL_DIR}/.env"
+FRESH_ENV=true
+if [[ -f "$ENV_FILE" ]]; then
+    FRESH_ENV=false
+    EXISTING_DB_PASSWORD=$(grep -E '^DATABASE_PASSWORD=' "$ENV_FILE" | head -1 | cut -d= -f2-)
+    if [[ -n "$EXISTING_DB_PASSWORD" ]]; then
+        DB_PASSWORD="$EXISTING_DB_PASSWORD"
+    else
+        # Hand-written .env without DATABASE_PASSWORD: persist the generated
+        # one so the ALTER USER below doesn't desync the file from the DB
+        echo "DATABASE_PASSWORD=${DB_PASSWORD}" >> "$ENV_FILE"
+        warn "Existing .env had no DATABASE_PASSWORD — appended a generated one"
+    fi
+    warn "Existing .env found — keeping its DATABASE_PASSWORD and secrets"
+fi
+
+# Create database and user (password kept in sync with .env on re-runs)
 log "Configuring PostgreSQL database..."
 if sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='runnable'" | grep -q 1; then
     # User exists — update password to match the new .env
@@ -179,7 +198,9 @@ ${DOMAIN} {
         reverse_proxy /socket.io/* localhost:3001
 
         # SPA: root must be set before try_files
-        root * ${INSTALL_DIR}/client/dist
+        # Served from ${WEB_DIR} (deploy.sh syncs the build here; Caddy
+        # cannot read the install dir when its parents are mode 700)
+        root * ${WEB_DIR}
         try_files {path} /index.html
         file_server
     }
@@ -237,6 +258,7 @@ ok "Application code ready"
 # ══════════════════════════════════════════════════════════════════════════════
 # 9. ENVIRONMENT FILE
 # ══════════════════════════════════════════════════════════════════════════════
+if [[ "$FRESH_ENV" == true ]]; then
 log "Generating .env..."
 cat > "${INSTALL_DIR}/.env" <<EOF
 # ── Database ──
@@ -286,6 +308,11 @@ SANDBOX_USER_PREFIX=runnable-
 EOF
 chmod 600 "${INSTALL_DIR}/.env"
 ok "Environment file generated"
+else
+    log "Preserving existing .env..."
+    chmod 600 "${INSTALL_DIR}/.env"
+    ok "Existing .env preserved (secrets and OAuth keys untouched)"
+fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 10. INSTALL DEPENDENCIES & BUILD
@@ -298,6 +325,14 @@ ok "Dependencies installed"
 log "Building client and server..."
 npm run build
 ok "Build complete"
+
+# Publish client build to the Caddy web root (same path deploy.sh syncs to)
+log "Publishing client build to ${WEB_DIR}..."
+mkdir -p "$WEB_DIR"
+rsync -a --delete "${INSTALL_DIR}/client/dist/" "$WEB_DIR/"
+find "$WEB_DIR" -type d -exec chmod 755 {} +
+find "$WEB_DIR" -type f -exec chmod 644 {} +
+ok "Client build published to ${WEB_DIR}"
 
 # Create project storage directories
 mkdir -p /var/runnable/projects
@@ -361,9 +396,13 @@ echo "║                                                        ║"
 echo "║  🌐 Dashboard:  https://${DOMAIN}"
 echo "║  🔌 API:        https://api.${DOMAIN}"
 echo "║                                                        ║"
+if [[ "$FRESH_ENV" == true ]]; then
 echo "║  👤 Admin Login:                                       ║"
 echo "║     Email:    ${ADMIN_EMAIL}"
 echo "║     Password: ${ADMIN_PASSWORD}"
+else
+echo "║  👤 Admin Login: unchanged (existing .env preserved)   ║"
+fi
 echo "║                                                        ║"
 echo "║  📁 Install:    ${INSTALL_DIR}"
 echo "║  📋 Logs:       journalctl -u runnable -f              ║"
@@ -377,11 +416,21 @@ echo "║     • *.${DOMAIN}     → A record (wildcard for projects)║"
 echo "║                                                        ║"
 echo "║  🔐 GitHub OAuth:                                      ║"
 echo "║     Create an app at github.com/settings/developers    ║"
-echo "║     Callback: https://api.${DOMAIN}/api/auth/github/callback"
+echo "║     Callback: https://${DOMAIN}/api/auth/github/callback"
 echo "║     Then update GITHUB_CLIENT_ID/SECRET in .env        ║"
+echo "║                                                        ║"
+echo "║  🔐 Google OAuth (optional):                           ║"
+echo "║     Create credentials at console.cloud.google.com     ║"
+echo "║     Callback: https://${DOMAIN}/api/auth/google/callback"
+echo "║     Then update GOOGLE_CLIENT_ID/SECRET in .env        ║"
 echo "║                                                        ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
+if [[ "$FRESH_ENV" == true ]]; then
 echo "⚠  IMPORTANT: Save these credentials! The admin password"
 echo "   is randomly generated and shown only once."
+else
+echo "ℹ  Existing .env preserved — credentials, JWT secrets and"
+echo "   OAuth keys were NOT regenerated."
+fi
 echo ""

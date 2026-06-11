@@ -4,6 +4,11 @@ export class InitialSchema1709520000000 implements MigrationInterface {
     name = 'InitialSchema1709520000000';
 
     public async up(queryRunner: QueryRunner): Promise<void> {
+        // Must run before any CREATE TABLE — every table's id column defaults
+        // to uuid_generate_v4(), and Postgres resolves the function at table
+        // creation time. On a fresh database the tables fail without this.
+        await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+
         // Create enum types
         await queryRunner.query(`
             DO $$ BEGIN
@@ -110,9 +115,6 @@ export class InitialSchema1709520000000 implements MigrationInterface {
                 CONSTRAINT "PK_app_settings" PRIMARY KEY ("id")
             )
         `);
-
-        // Enable uuid extension
-        await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
 
         // Foreign keys
         await queryRunner.query(`

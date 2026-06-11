@@ -3,7 +3,10 @@ import path from 'path';
 
 // Absolute path to the .env file, resolved once so it can be both loaded
 // and (when ADMIN_PASSWORD_RESET is used) rewritten by the server.
-export const envPath = path.resolve(process.cwd(), '../.env');
+// Resolved relative to this file (server/{src,dist}/config → repo root), not
+// process.cwd() — under systemd/docker the cwd is not the server directory.
+// ENV_FILE overrides for non-standard layouts.
+export const envPath = process.env.ENV_FILE || path.resolve(__dirname, '../../../.env');
 dotenv.config({ path: envPath });
 
 export const config = {
@@ -66,8 +69,15 @@ export const config = {
 // --- Production safety checks ---
 if (config.nodeEnv === 'production') {
     const errors: string[] = [];
-    if (!process.env.JWT_SECRET) errors.push('JWT_SECRET must be set in production');
-    if (!process.env.JWT_REFRESH_SECRET) errors.push('JWT_REFRESH_SECRET must be set in production');
+    // Reject the publicly-known placeholder values from .env.example, not just
+    // absence — a copied example file must never pass with forgeable tokens.
+    const JWT_PLACEHOLDERS = ['change_this_to_a_random_secret_key', 'change_this_to_another_random_secret_key', 'dev-secret-change-me', 'dev-refresh-secret-change-me'];
+    if (!process.env.JWT_SECRET || JWT_PLACEHOLDERS.includes(process.env.JWT_SECRET) || process.env.JWT_SECRET.length < 16) {
+        errors.push('JWT_SECRET must be set to a strong random value in production');
+    }
+    if (!process.env.JWT_REFRESH_SECRET || JWT_PLACEHOLDERS.includes(process.env.JWT_REFRESH_SECRET) || process.env.JWT_REFRESH_SECRET.length < 16) {
+        errors.push('JWT_REFRESH_SECRET must be set to a strong random value in production');
+    }
     if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'admin_password_change_me') {
         errors.push('ADMIN_PASSWORD must be changed in production');
     }

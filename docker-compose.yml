@@ -1,3 +1,5 @@
+# NOTE: This compose stack is for local/dev use only. Production installs use
+# setup.sh (systemd + native PostgreSQL + Caddy). Caddy is NOT included here.
 services:
   postgres:
     image: postgres:16
@@ -5,11 +7,11 @@ services:
     environment:
       POSTGRES_DB: runnable
       POSTGRES_USER: runnable
-      POSTGRES_PASSWORD: change_me_in_production
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-change_me_in_production}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U runnable" ]
       interval: 5s
@@ -30,6 +32,10 @@ services:
       - .env
     environment:
       DATABASE_HOST: postgres
+      # NODE_ENV deliberately not production: this dev stack runs with
+      # .env.example-style values, which the production config gate rejects.
+      # The container must also bind 0.0.0.0 so the port mapping works.
+      HOST: 0.0.0.0
     volumes:
       - projects:/var/runnable/projects
       - caddy-config:/etc/caddy/sites

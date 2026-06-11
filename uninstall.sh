@@ -45,6 +45,7 @@ echo "║     ⚠  Runnable — Complete Uninstall                ║"
 echo "╠══════════════════════════════════════════════════════╣"
 echo "║  This will permanently remove:                      ║"
 echo "║    • Runnable service and application files          ║"
+echo "║    • Client web root (/var/www/runnable)             ║"
 echo "║    • All hosted project data                        ║"
 echo "║    • Caddy site configs for Runnable                ║"
 if [[ "$KEEP_DB" == false ]]; then
@@ -136,6 +137,9 @@ rm -f /etc/caddy/sites/runnable*.caddyfile 2>/dev/null || true
 rm -f /etc/caddy/sites/*.caddyfile 2>/dev/null || true
 # Remove Runnable blocks from master Caddyfile (restore to empty)
 if [[ -f /etc/caddy/Caddyfile ]]; then
+    # Back up the current Caddyfile before overwriting it
+    cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak.uninstall
+    echo "  Existing Caddyfile backed up to /etc/caddy/Caddyfile.bak.uninstall"
     # Keep Caddy running but remove Runnable-specific config
     cat > /etc/caddy/Caddyfile << 'EOF'
 # Caddyfile — Runnable config removed by uninstall
@@ -160,6 +164,8 @@ ok "Application directory removed ($INSTALL_DIR)"
 log "Removing project data..."
 rm -rf /var/runnable
 ok "Project data removed (/var/runnable)"
+rm -rf /var/www/runnable
+ok "Client web root removed (/var/www/runnable)"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 8. REMOVE LOGS
