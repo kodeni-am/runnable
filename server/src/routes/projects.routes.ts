@@ -15,6 +15,8 @@ import { HealthMonitorService } from '../services/healthMonitor.service';
 import { ServerConfigService } from '../services/serverConfig.service';
 import { ProjectProvisioningService } from '../services/projectProvisioning.service';
 import { ProjectTeardownService } from '../services/projectTeardown.service';
+import { GithubService } from '../services/github.service';
+import { PreviewService } from '../services/preview.service';
 import { getTemplate } from '../templates/catalog';
 
 const router = Router();
@@ -169,7 +171,8 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
         const project = (req as any).project as Project;
 
         const { name, serverType, buildCommand, startCommand, envVars, port, internalPort,
-                useCompose, composeFile, composeService, notificationWebhookUrl, autoRestart } = req.body;
+                useCompose, composeFile, composeService, notificationWebhookUrl, autoRestart,
+                previewsEnabled, previewBaseDomain, previewEnvOverrides, previewTtlDays } = req.body;
         if (name) project.name = name;
         if (serverType) project.serverType = serverType as ServerType;
         if (buildCommand !== undefined) project.buildCommand = buildCommand;
@@ -241,8 +244,60 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
         }
         if (autoRestart !== undefined) project.autoRestart = Boolean(autoRestart);
 
+        if (previewBaseDomain !== undefined) {
+            if (previewBaseDomain === null || previewBaseDomain === '') {
+                project.previewBaseDomain = null as any;
+            } else {
+                const d = String(previewBaseDomain).trim().toLowerCase();
+                if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d)) {
+                    throw new AppError('previewBaseDomain must be a valid domain', 400);
+                }
+                project.previewBaseDomain = d;
+            }
+        }
+        if (previewTtlDays !== undefined) {
+            const n = Number(previewTtlDays);
+            if (!Number.isInteger(n) || n < 1 || n > 365) {
+                throw new AppError('previewTtlDays must be an integer between 1 and 365', 400);
+            }
+            project.previewTtlDays = n;
+        }
+        if (previewEnvOverrides !== undefined) {
+            if (previewEnvOverrides === null) {
+                project.previewEnvOverrides = null as any;
+            } else {
+                if (typeof previewEnvOverrides !== 'object' || Array.isArray(previewEnvOverrides)) {
+                    throw new AppError('previewEnvOverrides must be an object of string values', 400);
+                }
+                const clean: Record<string, string> = {};
+                for (const [key, value] of Object.entries(previewEnvOverrides)) {
+                    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+                        throw new AppError(`previewEnvOverrides.${key} must be a string`, 400);
+                    }
+                    clean[key] = String(value);
+                }
+                project.previewEnvOverrides = clean;
+            }
+        }
+        if (previewsEnabled !== undefined) project.previewsEnabled = Boolean(previewsEnabled);
+
+        // Enabling previews requires a base domain to serve them under.
+        if (project.previewsEnabled && !project.previewBaseDomain) {
+            throw new AppError('A preview base domain is required to enable PR previews', 400);
+        }
+
         const projectRepo = AppDataSource.getRepository(Project);
         await projectRepo.save(project);
+        // If previews are enabled and the repo's webhook predates preview
+        // support (push only), upgrade it to also receive pull_request events.
+        if (project.previewsEnabled && project.githubRepo?.webhookId && req.user!.githubToken) {
+            await GithubService.ensureWebhookEvents(
+                project.githubRepo.repoUrl,
+                req.user!.githubToken,
+                project.githubRepo.webhookId,
+                ['push', 'pull_request'],
+            ).catch(() => { /* best-effort; previews still work on the next reconnect */ });
+        }
         res.json(project);
     } catch (error) {
         next(error);
@@ -255,6 +310,29 @@ router.delete('/:id', requireProjectAccess(ProjectPermission.CAN_DELETE), async 
         const project = (req as any).project as Project;
         await ProjectTeardownService.teardown(project, req.user!.githubToken || undefined);
         res.json({ message: 'Project deleted' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// List preview environments for a project
+router.get('/:id/previews', requireProjectAccess(ProjectPermission.CAN_VIEW_GITHUB), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const previews = await PreviewService.listForParent(project.id);
+        res.json(previews);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Manually destroy a preview environment
+router.post('/:id/previews/:previewId/destroy', requireProjectAccess(ProjectPermission.CAN_START), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const destroyed = await PreviewService.destroyPreview(project.id, req.params.previewId as string);
+        if (!destroyed) throw new AppError('Preview not found', 404);
+        res.json({ message: 'Preview destroyed' });
     } catch (error) {
         next(error);
     }
