@@ -154,7 +154,7 @@ export default function Admin() {
                 <h1>Admin Panel</h1>
             </div>
             <div className="page-content">
-                {error && <div className="error-message">{error}</div>}
+                {error && <div className="alert alert-error">{error}</div>}
 
                 <div className="glass" style={{ padding: 24, borderRadius: 12 }}>
                     <h3 style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -266,7 +266,7 @@ export default function Admin() {
                         <h2 style={{ margin: 0 }}>System — Build Cache</h2>
                     </div>
 
-                    {cacheError && <div className="error-message">{cacheError}</div>}
+                    {cacheError && <div className="alert alert-error">{cacheError}</div>}
                     {cacheMessage && <div className="alert alert-success">{cacheMessage}</div>}
 
                     {cache && (
