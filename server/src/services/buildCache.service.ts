@@ -1,0 +1,105 @@
+// server/src/services/buildCache.service.ts
+// Enforces the admin-configured build-cache cap. Two caches exist:
+//  - the Docker daemon's builder cache (compose builds)
+//  - the runnable-buildkit container's cache (railpack builds)
+// Pruning concurrently with builds is safe: BuildKit never evicts cache
+// referenced by an in-flight build.
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { AppSettingsService } from './appSettings.service';
+import {
+    BUILDKIT_CONTAINER,
+    builderPruneArgs,
+    buildctlPruneArgsModern,
+    buildctlPruneArgsLegacy,
+    parseDockerSystemDf,
+    parseBuildctlDu,
+} from './buildCache.helpers';
+
+const execFileAsync = promisify(execFile);
+// Prunes of tens of GB can take minutes; outputs can be large.
+const EXEC_OPTS = { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 };
+
+export interface BuildCacheUsage {
+    daemonBytes: number;
+    buildkitBytes: number;
+}
+
+export class BuildCacheService {
+    // Two deploys finishing together must not run overlapping prunes —
+    // the second joins the first run instead.
+    private static inFlight: Promise<void> | null = null;
+
+    static async usage(): Promise<BuildCacheUsage> {
+        const { stdout } = await execFileAsync('docker', ['system', 'df', '--format', 'json'], EXEC_OPTS);
+        const daemonBytes = parseDockerSystemDf(stdout);
+
+        let buildkitBytes = 0;
+        if (await BuildCacheService.buildkitUp()) {
+            try {
+                const du = await execFileAsync('docker', ['exec', BUILDKIT_CONTAINER, 'buildctl', 'du'], EXEC_OPTS);
+                buildkitBytes = parseBuildctlDu(du.stdout);
+            } catch {
+                // builder container present but not responding — report 0
+            }
+        }
+        return { daemonBytes, buildkitBytes };
+    }
+
+    /** Post-deploy hook. Never throws; never blocks the deploy path. */
+    static enforceCap(): Promise<void> {
+        if (BuildCacheService.inFlight) return BuildCacheService.inFlight;
+        const run = (async () => {
+            try {
+                const { buildCacheKeepGB } = await AppSettingsService.get();
+                if (!buildCacheKeepGB || buildCacheKeepGB <= 0) return; // disabled
+                await BuildCacheService.prune(buildCacheKeepGB);
+            } catch (err: any) {
+                console.error('[BuildCache] enforcement failed:', err?.message || err);
+            } finally {
+                BuildCacheService.inFlight = null;
+            }
+        })();
+        BuildCacheService.inFlight = run;
+        return run;
+    }
+
+    /** Explicit "Prune now". Cap 0 means full prune. Throws on failure. */
+    static async pruneToCap(): Promise<{ freedBytes: number }> {
+        const before = await BuildCacheService.usage();
+        const { buildCacheKeepGB } = await AppSettingsService.get();
+        await BuildCacheService.prune(buildCacheKeepGB);
+        const after = await BuildCacheService.usage();
+        const freedBytes = Math.max(0,
+            (before.daemonBytes + before.buildkitBytes) - (after.daemonBytes + after.buildkitBytes));
+        return { freedBytes };
+    }
+
+    private static async prune(keepGB: number): Promise<void> {
+        await execFileAsync('docker', builderPruneArgs(keepGB), EXEC_OPTS);
+
+        if (!(await BuildCacheService.buildkitUp())) return;
+        try {
+            await execFileAsync('docker', buildctlPruneArgsModern(keepGB), EXEC_OPTS);
+        } catch (err: any) {
+            const msg = String(err?.stderr || err?.message || '');
+            // Older buildkit doesn't know --max-used-space; retry with the
+            // legacy flag. Any other failure propagates.
+            if (keepGB > 0 && /unknown flag|flag provided but not defined/i.test(msg)) {
+                await execFileAsync('docker', buildctlPruneArgsLegacy(keepGB), EXEC_OPTS);
+            } else {
+                throw err;
+            }
+        }
+    }
+
+    private static async buildkitUp(): Promise<boolean> {
+        try {
+            const { stdout } = await execFileAsync('docker',
+                ['ps', '--filter', `name=${BUILDKIT_CONTAINER}`, '--format', '{{.Status}}'], EXEC_OPTS);
+            return stdout.includes('Up');
+        } catch {
+            return false;
+        }
+    }
+}
