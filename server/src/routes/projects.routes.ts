@@ -1,4 +1,5 @@
 import { Router, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { AppDataSource } from '../config/data-source';
@@ -13,6 +14,7 @@ import { ProcessService } from '../services/process.service';
 import { HealthMonitorService } from '../services/healthMonitor.service';
 import { ServerConfigService } from '../services/serverConfig.service';
 import { GithubService } from '../services/github.service';
+import { getTemplate } from '../templates/catalog';
 import { config } from '../config';
 
 const router = Router();
@@ -48,6 +50,95 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
     }
 });
 
+/**
+ * Shared provisioning path for both plain project creation and one-click
+ * templates: permission checks, subdomain validation/uniqueness, port
+ * allocation, entity creation, and sandbox setup (with rollback).
+ */
+async function provisionProject(
+    user: User,
+    name: string,
+    subdomain: string,
+    serverType: ServerType,
+    extras: Partial<Project> = {},
+): Promise<Project> {
+    // Check global user permissions
+    const userPerms = user.permissions ?? DEFAULT_USER_PERMISSIONS;
+    if (!userPerms.canCreateProjects && user.role !== Role.ADMIN) {
+        throw new AppError('You are not allowed to create projects', 403);
+    }
+
+    // Check maxProjects
+    if (userPerms.maxProjects !== null && userPerms.maxProjects !== undefined && user.role !== Role.ADMIN) {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const count = await projectRepo.count({ where: { userId: user.id } });
+        if (count >= userPerms.maxProjects) {
+            throw new AppError(`You have reached your maximum of ${userPerms.maxProjects} project(s)`, 403);
+        }
+    }
+
+    // Check allowed server types
+    if (userPerms.allowedServerTypes && userPerms.allowedServerTypes.length > 0 && user.role !== Role.ADMIN) {
+        if (!userPerms.allowedServerTypes.includes(serverType)) {
+            throw new AppError(`Server type "${serverType}" is not allowed for your account`, 403);
+        }
+    }
+
+    // Validate subdomain format
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(subdomain)) {
+        throw new AppError('Subdomain must be lowercase alphanumeric with hyphens', 400);
+    }
+
+    const projectRepo = AppDataSource.getRepository(Project);
+
+    // Check uniqueness
+    const existing = await projectRepo.findOne({ where: { subdomain } });
+    if (existing) {
+        throw new AppError('Subdomain is already taken', 409);
+    }
+
+    // Allocate port (start from 9000, find next available)
+    // Use internalPort (the container-side port) for allocation — project.port
+    // gets overwritten with the dynamic host port after each run and cannot be
+    // used to determine the highest assigned container port.
+    // Compose projects are excluded: their internalPort is the template's
+    // fixed container port (e.g. 27017), which would poison the watermark.
+    const lastProject = await projectRepo
+        .createQueryBuilder('project')
+        .where('project.useCompose = :useCompose', { useCompose: false })
+        .orderBy('project.internalPort', 'DESC', 'NULLS LAST')
+        .getOne();
+    const port = (lastProject?.internalPort || 8999) + 1;
+
+    const directoryPath = path.join(config.hosting.servDir, subdomain);
+
+    // Create sandbox (or just directory)
+    const project = projectRepo.create({
+        name,
+        subdomain,
+        directoryPath,
+        serverType,
+        status: ServiceStatus.STOPPED,
+        port,
+        internalPort: port, // always set so port allocation and start() can rely on this
+        userId: user.id,
+        ...extras,
+    });
+
+    // Save first to get the generated UUID
+    await projectRepo.save(project);
+
+    try {
+        await SandboxService.createSandbox(project.id, directoryPath);
+    } catch (error) {
+        // Rollback if sandbox creation fails
+        await projectRepo.remove(project);
+        throw error;
+    }
+
+    return project;
+}
+
 // Create project (with global permission checks)
 router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -57,73 +148,56 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
             throw new AppError('Name, subdomain, and serverType are required', 400);
         }
 
-        // Check global user permissions
-        const userPerms = req.user!.permissions ?? DEFAULT_USER_PERMISSIONS;
-        if (!userPerms.canCreateProjects && req.user!.role !== Role.ADMIN) {
-            throw new AppError('You are not allowed to create projects', 403);
+        const project = await provisionProject(req.user!, name, subdomain, serverType as ServerType);
+        res.status(201).json(project);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Create project from a one-click template
+router.post('/from-template', async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const { templateKey, name, subdomain, env } = req.body;
+
+        if (!templateKey || !name || !subdomain) {
+            throw new AppError('templateKey, name, and subdomain are required', 400);
         }
 
-        // Check maxProjects
-        if (userPerms.maxProjects !== null && userPerms.maxProjects !== undefined && req.user!.role !== Role.ADMIN) {
-            const projectRepo = AppDataSource.getRepository(Project);
-            const count = await projectRepo.count({ where: { userId: req.user!.id } });
-            if (count >= userPerms.maxProjects) {
-                throw new AppError(`You have reached your maximum of ${userPerms.maxProjects} project(s)`, 403);
+        const template = getTemplate(String(templateKey));
+        if (!template) {
+            throw new AppError('Unknown template', 404);
+        }
+
+        // Resolve env values: generated secrets, then user overrides for the
+        // non-generated ones (only keys the template declares are accepted)
+        const envVars: Record<string, string> = {};
+        for (const spec of template.env) {
+            if (spec.generate) {
+                envVars[spec.key] = crypto.randomBytes(16).toString('hex');
+            } else {
+                const provided = env && typeof env === 'object' ? (env as Record<string, unknown>)[spec.key] : undefined;
+                envVars[spec.key] = typeof provided === 'string' && provided !== '' ? provided : (spec.defaultValue || '');
             }
         }
 
-        // Check allowed server types
-        if (userPerms.allowedServerTypes && userPerms.allowedServerTypes.length > 0 && req.user!.role !== Role.ADMIN) {
-            if (!userPerms.allowedServerTypes.includes(serverType)) {
-                throw new AppError(`Server type "${serverType}" is not allowed for your account`, 403);
-            }
-        }
-
-        // Validate subdomain format
-        if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(subdomain)) {
-            throw new AppError('Subdomain must be lowercase alphanumeric with hyphens', 400);
-        }
-
-        const projectRepo = AppDataSource.getRepository(Project);
-
-        // Check uniqueness
-        const existing = await projectRepo.findOne({ where: { subdomain } });
-        if (existing) {
-            throw new AppError('Subdomain is already taken', 409);
-        }
-
-        // Allocate port (start from 9000, find next available)
-        // Use internalPort (the container-side port) for allocation — project.port
-        // gets overwritten with the dynamic host port after each run and cannot be
-        // used to determine the highest assigned container port.
-        const lastProject = await projectRepo
-            .createQueryBuilder('project')
-            .orderBy('project.internalPort', 'DESC', 'NULLS LAST')
-            .getOne();
-        const port = (lastProject?.internalPort || 8999) + 1;
-
-        const directoryPath = path.join(config.hosting.servDir, subdomain);
-
-        // Create sandbox (or just directory)
-        const project = projectRepo.create({
-            name,
-            subdomain,
-            directoryPath,
-            serverType: serverType as ServerType,
-            status: ServiceStatus.STOPPED,
-            port,
-            internalPort: port, // always set so port allocation and start() can rely on this
-            userId: req.user!.id,
+        const project = await provisionProject(req.user!, name, subdomain, ServerType.APP, {
+            useCompose: true,
+            composeFile: 'docker-compose.yml',
+            composeService: template.composeService,
+            internalPort: template.internalPort,
+            envVars,
         });
 
-        // Save first to get the generated UUID
-        await projectRepo.save(project);
-
+        // Write the template's compose file into the project directory; roll
+        // everything back if it fails — a compose project without its compose
+        // file can never start.
         try {
-            await SandboxService.createSandbox(project.id, directoryPath);
+            await fs.mkdir(project.directoryPath, { recursive: true });
+            await fs.writeFile(path.join(project.directoryPath, 'docker-compose.yml'), template.composeYaml, { mode: 0o644 });
         } catch (error) {
-            // Rollback if sandbox creation fails
-            await projectRepo.remove(project);
+            await SandboxService.destroySandbox(project.id).catch(() => { });
+            await AppDataSource.getRepository(Project).remove(project).catch(() => { });
             throw error;
         }
 

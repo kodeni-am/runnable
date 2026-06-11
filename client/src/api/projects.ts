@@ -77,6 +77,16 @@ export interface CreateProjectData {
     serverType: string;
 }
 
+export interface AppTemplateInfo {
+    key: string;
+    name: string;
+    description: string;
+    kind: 'web' | 'database';
+    internalPort: number;
+    composeService: string;
+    env: { key: string; label: string; defaultValue?: string; generate?: boolean }[];
+}
+
 export interface Deployment {
     id: string;
     projectId: string;
@@ -93,6 +103,9 @@ export const projectsApi = {
     list: () => api.get<Project[]>('/projects'),
     get: (id: string) => api.get<Project>(`/projects/${id}`),
     create: (data: CreateProjectData) => api.post<Project>('/projects', data),
+    listTemplates: () => api.get<AppTemplateInfo[]>('/templates'),
+    createFromTemplate: (data: { templateKey: string; name: string; subdomain: string; env?: Record<string, string> }) =>
+        api.post<Project>('/projects/from-template', data),
     update: (id: string, data: Partial<Project>) => api.put<Project>(`/projects/${id}`, data),
     delete: (id: string) => api.delete(`/projects/${id}`),
 
