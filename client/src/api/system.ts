@@ -41,6 +41,7 @@ export interface SystemStats {
 export const systemApi = {
     stats: () => api.get<SystemStats>('/system/stats'),
     getBuildCache: () => api.get<BuildCacheInfo>('/system/build-cache'),
+    getBuildCacheSettings: () => api.get<{ keepGB: number }>('/system/build-cache/settings'),
     updateBuildCache: (keepGB: number) => api.put<{ keepGB: number }>('/system/build-cache', { keepGB }),
     pruneBuildCache: () => api.post<{ freedBytes: number }>('/system/build-cache/prune'),
 };

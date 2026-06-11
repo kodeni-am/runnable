@@ -185,6 +185,18 @@ function buildCacheError(err: any): string {
     return `Build-cache operation failed: ${detail}`;
 }
 
+// Settings only — instant. The usage endpoint below can take 30s+ when the
+// cache is large (docker system df enumerates every entry), so the UI loads
+// the cap from here and the usage separately.
+router.get('/build-cache/settings', async (_req, res, next: NextFunction) => {
+    try {
+        const settings = await AppSettingsService.get();
+        res.json({ keepGB: settings.buildCacheKeepGB });
+    } catch (error) {
+        next(error);
+    }
+});
+
 router.get('/build-cache', async (_req, res) => {
     try {
         const [usage, settings] = await Promise.all([

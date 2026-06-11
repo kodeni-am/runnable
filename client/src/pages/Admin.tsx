@@ -38,12 +38,23 @@ export default function Admin() {
 
     const gb = (bytes: number) => (bytes / 1e9).toFixed(2);
 
-    const fetchBuildCache = async () => {
+    // The cap setting loads instantly; the usage measurement can take 30s+
+    // on a large cache (docker system df enumerates every entry), so the two
+    // are fetched separately — the cap field must never wait on docker.
+    const fetchCapSetting = async () => {
+        try {
+            const { data } = await systemApi.getBuildCacheSettings();
+            setCapInput(String(data.keepGB));
+        } catch (err: any) {
+            setCacheError(err.response?.data?.error || 'Failed to load build-cache settings');
+        }
+    };
+
+    const fetchUsage = async () => {
         try {
             setCacheError('');
             const { data } = await systemApi.getBuildCache();
             setCache(data);
-            setCapInput(String(data.keepGB));
         } catch (err: any) {
             setCacheError(err.response?.data?.error || 'Failed to load build-cache info');
         }
@@ -51,7 +62,8 @@ export default function Admin() {
 
     useEffect(() => {
         fetchUsers();
-        fetchBuildCache();
+        fetchCapSetting();
+        fetchUsage();
     }, []);
 
     const fetchUsers = async () => {
@@ -76,9 +88,12 @@ export default function Admin() {
             setCapSaving(true);
             setCacheError('');
             setCacheMessage('');
-            await systemApi.updateBuildCache(keepGB);
+            const { data } = await systemApi.updateBuildCache(keepGB);
+            setCapInput(String(data.keepGB));
             setCacheMessage(keepGB === 0 ? 'Automatic pruning disabled' : `Cap saved: ${keepGB} GB`);
-            await fetchBuildCache();
+            // Refresh usage in the background — the save itself is done, and
+            // the measurement must not hold the button on "Saving…".
+            void fetchUsage();
         } catch (err: any) {
             setCacheError(err.response?.data?.error || 'Failed to save cap');
         } finally {
@@ -93,7 +108,7 @@ export default function Admin() {
             setCacheMessage('');
             const { data } = await systemApi.pruneBuildCache();
             setCacheMessage(`Freed ${gb(data.freedBytes)} GB`);
-            await fetchBuildCache();
+            void fetchUsage();
         } catch (err: any) {
             setCacheError(err.response?.data?.error || 'Prune failed');
         } finally {
@@ -269,10 +284,14 @@ export default function Admin() {
                     {cacheError && <div className="alert alert-error">{cacheError}</div>}
                     {cacheMessage && <div className="alert alert-success">{cacheMessage}</div>}
 
-                    {cache && (
+                    {cache ? (
                         <p style={{ marginBottom: 16 }}>
                             Current usage: <strong>{gb(cache.usageBytes)} GB</strong>
                             {' '}(daemon {gb(cache.daemonBytes)} GB, buildkit {gb(cache.buildkitBytes)} GB)
+                        </p>
+                    ) : !cacheError && (
+                        <p style={{ marginBottom: 16, color: 'var(--text-secondary)' }}>
+                            Measuring cache usage… (can take a minute on a large cache)
                         </p>
                     )}
 
@@ -280,12 +299,13 @@ export default function Admin() {
                         <label htmlFor="cache-cap">Cap (GB, 0 = disabled):</label>
                         <input
                             id="cache-cap"
+                            className="form-input"
                             type="number"
                             min={0}
                             max={500}
                             value={capInput}
                             onChange={(e) => setCapInput(e.target.value)}
-                            style={{ width: 100 }}
+                            style={{ width: 110 }}
                         />
                         <button className="btn btn-primary" onClick={handleSaveCap} disabled={capSaving}>
                             {capSaving ? 'Saving…' : 'Save'}
