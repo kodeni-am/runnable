@@ -191,15 +191,25 @@ ${aliases}
         }
     }
 
-    static async reloadCaddy(): Promise<void> {
+    /**
+     * Reload the master reverse proxy. Lenient by default (failures are
+     * logged and swallowed — most callers can't do anything useful with
+     * them). Pass { strict: true } to propagate failure: the zero-downtime
+     * cutover must know whether the new config was actually activated so it
+     * can roll the config file back.
+     */
+    static async reloadCaddy(options?: { strict?: boolean }): Promise<void> {
         try {
             const { execFile } = await import('child_process');
             const { promisify } = await import('util');
             const execFileAsync = promisify(execFile);
             await execFileAsync('sudo', ['-n', 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile']);
             console.log('✅ Caddy reloaded successfully');
-        } catch (error) {
+        } catch (error: any) {
             console.error('Failed to reload Caddy:', error);
+            if (options?.strict) {
+                throw new Error(`Caddy reload failed: ${error?.stderr?.trim() || error?.message || 'unknown error'}`);
+            }
         }
     }
 }

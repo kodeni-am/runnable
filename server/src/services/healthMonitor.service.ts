@@ -76,7 +76,14 @@ export class HealthMonitorService {
         }
     }
 
-    private static async isContainerRunning(project: Project): Promise<boolean> {
+    /**
+     * Compose-aware container/stack liveness. Public: reused by the deploy
+     * eligibility gate, the verified-stillServing check, and boot
+     * reconciliation — for compose projects containerId is a compose project
+     * name that `docker inspect` cannot resolve, so this is the one correct
+     * way to ask "is the active workload up".
+     */
+    static async isContainerRunning(project: Project): Promise<boolean> {
         if (!project.containerId) return false;
 
         if (project.useCompose) {
