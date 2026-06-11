@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { Github, Mail } from 'lucide-react';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -8,7 +8,14 @@ export default function Login() {
     usePageTitle('Login');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
+    const [searchParams] = useSearchParams();
+    // Surface OAuth failures the server bounces back here (e.g. a blocked
+    // login-CSRF attempt or expired flow)
+    const [error, setError] = useState(
+        searchParams.get('error') === 'oauth_state_mismatch'
+            ? 'The sign-in attempt could not be verified. Please try again.'
+            : ''
+    );
     const { login, isLoading } = useAuthStore();
     const navigate = useNavigate();
 

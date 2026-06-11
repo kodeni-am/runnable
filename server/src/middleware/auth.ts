@@ -17,6 +17,8 @@ export type AuthRequest<P = import('express-serve-static-core').ParamsDictionary
 export interface JwtPayload {
     userId: string;
     role: Role;
+    /** Must match the user's current tokenVersion; bumped to revoke all tokens */
+    tokenVersion?: number;
 }
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
@@ -42,6 +44,12 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
         if (!user) {
             res.status(401).json({ error: 'User not found' });
+            return;
+        }
+
+        // Tokens issued before a password/email change carry a stale version
+        if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+            res.status(401).json({ error: 'Session invalidated, please log in again' });
             return;
         }
 
@@ -101,6 +109,13 @@ export const requireProjectAccess = (...permissions: ProjectPermission[]) => {
             const projectId = req.params.id as string;
             if (!projectId) {
                 res.status(400).json({ error: 'Project ID is required' });
+                return;
+            }
+
+            // Reject malformed ids before the query — a non-UUID makes the
+            // Postgres uuid cast throw, surfacing as a 500 instead of a 404.
+            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) {
+                res.status(404).json({ error: 'Project not found' });
                 return;
             }
 

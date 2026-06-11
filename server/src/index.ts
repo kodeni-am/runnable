@@ -29,6 +29,8 @@ import githubRoutes from './routes/github.routes';
 import domainRoutes from './routes/domains.routes';
 import adminRoutes from './routes/admin.routes';
 import systemRoutes from './routes/system.routes';
+import templateRoutes from './routes/templates.routes';
+import webhookRoutes from './routes/webhooks.routes';
 
 /**
  * Flip ADMIN_PASSWORD_RESET back to false in .env so a password reset only
@@ -109,6 +111,9 @@ async function bootstrap() {
     }
 
     const app = express();
+    // Behind the Caddy reverse proxy — without this, req.ip is the proxy's
+    // address and every rate limiter collapses into one global bucket.
+    app.set('trust proxy', 1);
     const httpServer = createServer(app);
 
     // Socket.IO for real-time updates
@@ -132,7 +137,7 @@ async function bootstrap() {
             if (!token) return next(new Error('unauthorized'));
             const decoded = jwt.verify(token, config.jwt.secret) as JwtPayload;
             socket.data.userId = decoded.userId;
-            socket.data.role = decoded.role;
+            socket.data.tokenVersion = decoded.tokenVersion ?? 0;
             next();
         } catch {
             next(new Error('unauthorized'));
@@ -150,8 +155,14 @@ async function bootstrap() {
                 const project = await AppDataSource.getRepository(Project).findOne({ where: { id: projectId } });
                 if (!project) return;
 
-                const isOwner = project.userId === socket.data.userId;
-                const isAdmin = socket.data.role === Role.ADMIN;
+                // Check role and token version from the DB, not the token —
+                // a demoted admin or a revoked session must not keep
+                // subscribe access for the token's lifetime
+                const user = await AppDataSource.getRepository(User).findOne({ where: { id: socket.data.userId } });
+                if (!user || (user.tokenVersion ?? 0) !== socket.data.tokenVersion) return;
+
+                const isOwner = project.userId === user.id;
+                const isAdmin = user.role === Role.ADMIN;
                 let allowed = isOwner || isAdmin;
                 if (!allowed) {
                     const collab = await AppDataSource.getRepository(ProjectCollaborator).findOne({
@@ -203,16 +214,19 @@ async function bootstrap() {
     app.use('/api/projects', domainRoutes);
     app.use('/api/admin', adminRoutes);
     app.use('/api/system', systemRoutes);
-
-    // GitHub webhook (mounted at root level)
-    app.use('/api', githubRoutes);
+    app.use('/api/templates', templateRoutes);
+    app.use('/api/webhooks', webhookRoutes);
 
     // Error handler (must be last)
     app.use(errorHandler);
 
-    // Start server
-    httpServer.listen(config.port, () => {
-        console.log(`🚀 Runnable API server running on port ${config.port}`);
+    // Start server. In production bind to loopback only: the API sits behind
+    // the reverse proxy, and `trust proxy` makes X-Forwarded-For
+    // authoritative — a direct connection to the port could spoof it (and
+    // with it, the rate-limit buckets). HOST overrides for containers.
+    const host = process.env.HOST || (config.nodeEnv === 'production' ? '127.0.0.1' : '0.0.0.0');
+    httpServer.listen(config.port, host, () => {
+        console.log(`🚀 Runnable API server running on ${host}:${config.port}`);
         console.log(`📡 Environment: ${config.nodeEnv}`);
     });
 

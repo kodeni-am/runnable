@@ -8,6 +8,10 @@ import { JwtPayload } from '../middleware/auth';
 
 const userRepo = () => AppDataSource.getRepository(User);
 
+// Compared against when login hits a non-existent account, so response time
+// doesn't reveal whether an email is registered.
+const DUMMY_HASH = bcrypt.hashSync('runnable-timing-equalizer', 12);
+
 export class AuthService {
     static async register(email: string, username: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
         const existing = await userRepo().findOne({ where: [{ email }, { username }] });
@@ -33,6 +37,7 @@ export class AuthService {
     static async login(email: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
         const user = await userRepo().findOne({ where: { email } });
         if (!user || !user.passwordHash) {
+            await bcrypt.compare(password, DUMMY_HASH);
             throw new AppError('Invalid credentials', 401);
         }
 
@@ -45,7 +50,7 @@ export class AuthService {
         return { user, ...tokens };
     }
 
-    static async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+    static async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<User> {
         if (!newPassword || newPassword.length < 8) {
             throw new AppError('New password must be at least 8 characters', 400);
         }
@@ -65,7 +70,11 @@ export class AuthService {
         }
 
         user.passwordHash = await bcrypt.hash(newPassword, 12);
+        // Invalidate every previously issued access/refresh token — changing
+        // the password must kill any session an attacker may already hold.
+        user.tokenVersion = (user.tokenVersion ?? 0) + 1;
         await userRepo().save(user);
+        return user;
     }
 
     static async changeEmail(userId: string, currentPassword: string, newEmail: string): Promise<User> {
@@ -98,6 +107,8 @@ export class AuthService {
         }
 
         user.email = email;
+        // Invalidate existing sessions, same as a password change
+        user.tokenVersion = (user.tokenVersion ?? 0) + 1;
         await userRepo().save(user);
         return user;
     }
@@ -120,6 +131,10 @@ export class AuthService {
             try {
                 const decoded = jwt.verify(profile.token, config.jwt.secret) as JwtPayload;
                 user = await userRepo().findOne({ where: { id: decoded.userId } });
+                // A token from before a password/email change must not link accounts
+                if (user && (decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+                    user = null;
+                }
             } catch (e) {
                 // If token is invalid/expired, we'll just fall back to email matching
             }
@@ -193,6 +208,9 @@ export class AuthService {
             if (!user) {
                 throw new AppError('User not found', 401);
             }
+            if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+                throw new AppError('Session invalidated', 401);
+            }
             return AuthService.generateTokens(user);
         } catch {
             throw new AppError('Invalid refresh token', 401);
@@ -200,7 +218,7 @@ export class AuthService {
     }
 
     static generateTokens(user: User): { accessToken: string; refreshToken: string } {
-        const payload: JwtPayload = { userId: user.id, role: user.role };
+        const payload: JwtPayload = { userId: user.id, role: user.role, tokenVersion: user.tokenVersion ?? 0 };
 
         const accessToken = jwt.sign(payload, config.jwt.secret, {
             expiresIn: config.jwt.accessExpiry as any,

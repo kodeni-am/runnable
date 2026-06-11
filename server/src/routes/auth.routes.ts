@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import passport from 'passport';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
@@ -251,7 +252,11 @@ router.post('/change-password', authLimiter, authenticate, async (req: AuthReque
             res.status(400).json({ error: 'New password is required' });
             return;
         }
-        await AuthService.changePassword(req.user!.id, currentPassword || '', newPassword);
+        const user = await AuthService.changePassword(req.user!.id, currentPassword || '', newPassword);
+        // The version bump invalidated every existing token (including this
+        // session's) — issue fresh cookies so the user stays logged in here.
+        const tokens = AuthService.generateTokens(user);
+        setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
         res.json({ message: 'Password updated' });
     } catch (error) {
         next(error);
@@ -267,18 +272,46 @@ router.post('/change-email', authLimiter, authenticate, async (req: AuthRequest,
             return;
         }
         const user = await AuthService.changeEmail(req.user!.id, currentPassword || '', newEmail);
+        // Re-issue cookies — the version bump invalidated the current session's tokens
+        const tokens = AuthService.generateTokens(user);
+        setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
         res.json({ message: 'Email updated', email: user.email });
     } catch (error) {
         next(error);
     }
 });
 
-// GitHub OAuth
-router.get('/github', (req: Request, res: Response, next: NextFunction) => {
-    // Pass accessToken cookie (for linking) and redirect path in state
+// Bind the OAuth flow to the initiating browser with a nonce cookie —
+// without it, an attacker-induced top-level navigation could complete a
+// login-CSRF and land attacker-issued cookies in the victim's browser.
+function startOAuthState(req: Request, res: Response): string {
     const accessToken = req.cookies?.accessToken;
     const redirect = req.query.redirect as string || '';
-    const state = Buffer.from(JSON.stringify({ token: accessToken || '', redirect })).toString('base64');
+    const nonce = crypto.randomBytes(16).toString('hex');
+    res.cookie('oauthNonce', nonce, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        maxAge: 10 * 60 * 1000,
+        path: '/',
+    });
+    return Buffer.from(JSON.stringify({ token: accessToken || '', redirect, nonce })).toString('base64');
+}
+
+function verifyOAuthNonce(req: Request, res: Response): boolean {
+    const cookieNonce = req.cookies?.oauthNonce;
+    res.clearCookie('oauthNonce', { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/' });
+    try {
+        const state = JSON.parse(Buffer.from(req.query.state as string || '', 'base64').toString());
+        return Boolean(state.nonce) && state.nonce === cookieNonce;
+    } catch {
+        return false;
+    }
+}
+
+// GitHub OAuth
+router.get('/github', (req: Request, res: Response, next: NextFunction) => {
+    const state = startOAuthState(req, res);
     passport.authenticate('github', { session: false, state })(req, res, next);
 });
 
@@ -288,6 +321,10 @@ router.get(
     (req: Request, res: Response) => {
         const result = req.user as any;
         const clientUrl = process.env.CLIENT_URL || 'http://localhost:5175';
+        if (!verifyOAuthNonce(req, res)) {
+            res.redirect(`${clientUrl}/login?error=oauth_state_mismatch`);
+            return;
+        }
         setAuthCookies(res, result.accessToken, result.refreshToken);
         // Redirect to the original page if specified
         let redirect = '/auth/callback';
@@ -301,9 +338,7 @@ router.get(
 
 // Google OAuth
 router.get('/google', (req: Request, res: Response, next: NextFunction) => {
-    const accessToken = req.cookies?.accessToken;
-    const redirect = req.query.redirect as string || '';
-    const state = Buffer.from(JSON.stringify({ token: accessToken || '', redirect })).toString('base64');
+    const state = startOAuthState(req, res);
     passport.authenticate('google', { session: false, scope: ['profile', 'email'], state })(req, res, next);
 });
 
@@ -313,6 +348,10 @@ router.get(
     (req: Request, res: Response) => {
         const result = req.user as any;
         const clientUrl = process.env.CLIENT_URL || 'http://localhost:5175';
+        if (!verifyOAuthNonce(req, res)) {
+            res.redirect(`${clientUrl}/login?error=oauth_state_mismatch`);
+            return;
+        }
         setAuthCookies(res, result.accessToken, result.refreshToken);
         let redirect = '/auth/callback';
         try {

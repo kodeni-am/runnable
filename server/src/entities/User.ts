@@ -80,6 +80,13 @@ export class User {
     @Column({ type: 'simple-json', nullable: true })
     permissions?: UserPermissions;
 
+    /**
+     * Bumped on password/email change to invalidate all previously issued
+     * tokens — stateless JWTs can't be revoked any other way.
+     */
+    @Column({ default: 0 })
+    tokenVersion: number;
+
     @OneToMany(() => Project, (project) => project.user)
     projects: Project[];
 
