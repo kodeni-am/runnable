@@ -19,6 +19,9 @@ import {
 const execFileAsync = promisify(execFile);
 // Prunes of tens of GB can take minutes; outputs can be large.
 const EXEC_OPTS = { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 };
+// Read-only usage queries must fail fast — a wedged daemon should not
+// hold the admin UI for the full prune timeout.
+const READ_OPTS = { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 };
 
 export interface BuildCacheUsage {
     daemonBytes: number;
@@ -31,13 +34,13 @@ export class BuildCacheService {
     private static inFlight: Promise<void> | null = null;
 
     static async usage(): Promise<BuildCacheUsage> {
-        const { stdout } = await execFileAsync('docker', ['system', 'df', '--format', 'json'], EXEC_OPTS);
+        const { stdout } = await execFileAsync('docker', ['system', 'df', '--format', 'json'], READ_OPTS);
         const daemonBytes = parseDockerSystemDf(stdout);
 
         let buildkitBytes = 0;
         if (await BuildCacheService.buildkitUp()) {
             try {
-                const du = await execFileAsync('docker', ['exec', BUILDKIT_CONTAINER, 'buildctl', 'du'], EXEC_OPTS);
+                const du = await execFileAsync('docker', ['exec', BUILDKIT_CONTAINER, 'buildctl', 'du'], READ_OPTS);
                 buildkitBytes = parseBuildctlDu(du.stdout);
             } catch {
                 // builder container present but not responding — report 0
@@ -103,7 +106,7 @@ export class BuildCacheService {
             const { stdout } = await execFileAsync('docker',
                 // ^...$ anchors: docker's name filter is a regex substring
                 // match, and e.g. "runnable-buildkit-dev" must not count.
-                ['ps', '--filter', `name=^${BUILDKIT_CONTAINER}$`, '--format', '{{.Status}}'], EXEC_OPTS);
+                ['ps', '--filter', `name=^${BUILDKIT_CONTAINER}$`, '--format', '{{.Status}}'], READ_OPTS);
             return stdout.includes('Up');
         } catch {
             return false;

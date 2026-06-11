@@ -180,9 +180,9 @@ router.get('/stats', async (_req, res, next: NextFunction) => {
 
 // ── Build-cache GC (spec: docs/superpowers/specs/2026-06-11-build-cache-gc-cap-design.md) ──
 
-function dockerError(err: any): string {
+function buildCacheError(err: any): string {
     const detail = String(err?.stderr || err?.message || 'unknown error').slice(0, 200);
-    return `Docker command failed: ${detail}`;
+    return `Build-cache operation failed: ${detail}`;
 }
 
 router.get('/build-cache', async (_req, res) => {
@@ -198,7 +198,7 @@ router.get('/build-cache', async (_req, res) => {
             keepGB: settings.buildCacheKeepGB,
         });
     } catch (err: any) {
-        res.status(500).json({ error: dockerError(err) });
+        res.status(500).json({ error: buildCacheError(err) });
     }
 });
 
@@ -220,7 +220,7 @@ router.post('/build-cache/prune', async (_req, res) => {
         const { freedBytes } = await BuildCacheService.pruneToCap();
         res.json({ freedBytes });
     } catch (err: any) {
-        res.status(500).json({ error: dockerError(err) });
+        res.status(500).json({ error: buildCacheError(err) });
     }
 });
 
