@@ -7,6 +7,7 @@ import {
     ManyToOne,
     OneToOne,
     OneToMany,
+    JoinColumn,
 } from 'typeorm';
 import { ServerType, ServiceStatus } from './enums';
 import { User } from './User';
@@ -84,6 +85,56 @@ export class Project {
     /** Restart the container automatically when the health monitor finds it dead */
     @Column({ default: false })
     autoRestart: boolean;
+
+    // ── Preview / PR deployments ──────────────────────────────────────────────
+
+    /** Parent-project config: enable ephemeral per-PR preview environments */
+    @Column({ default: false })
+    previewsEnabled: boolean;
+
+    /** Base domain previews are served under, e.g. "preview.example.com" */
+    @Column({ nullable: true })
+    previewBaseDomain?: string;
+
+    /** Env vars that override inherited parent env when building a preview */
+    @Column({ type: 'simple-json', nullable: true })
+    previewEnvOverrides?: Record<string, string>;
+
+    /** Tear a preview down after this many days with no new commits */
+    @Column({ default: 7 })
+    previewTtlDays: number;
+
+    /** True when this row IS a preview environment (not a normal project) */
+    @Column({ default: false })
+    isPreview: boolean;
+
+    /** For a preview row: the parent project it belongs to */
+    @ManyToOne(() => Project, { nullable: true, onDelete: 'CASCADE' })
+    @JoinColumn({ name: 'parentProjectId' })
+    parentProject?: Project;
+
+    @Column({ nullable: true })
+    parentProjectId?: string;
+
+    /** For a preview row: the GitHub PR number */
+    @Column({ nullable: true })
+    prNumber?: number;
+
+    /** For a preview row: the PR head branch */
+    @Column({ nullable: true })
+    prBranch?: string;
+
+    /** For a preview row: last deploy time, used by the TTL sweep */
+    @Column({ type: 'timestamp', nullable: true })
+    lastActivityAt?: Date;
+
+    /**
+     * Overrides config.hosting.baseDomain when generating this project's Caddy
+     * config. Preview rows set this to the parent's previewBaseDomain; normal
+     * projects leave it null.
+     */
+    @Column({ nullable: true })
+    baseDomain?: string;
 
     @ManyToOne(() => User, (user) => user.projects, { onDelete: 'CASCADE' })
     user: User;
