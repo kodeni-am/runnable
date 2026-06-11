@@ -8,7 +8,9 @@
         "start": "node dist/index.js",
         "typeorm": "tsx ./node_modules/typeorm/cli.js",
         "migration:generate": "npm run typeorm -- migration:generate -d src/config/data-source.ts",
-        "migration:run": "npm run typeorm -- migration:run -d src/config/data-source.ts"
+        "migration:run": "npm run typeorm -- migration:run -d src/config/data-source.ts",
+        "test": "vitest run",
+        "test:watch": "vitest"
     },
     "dependencies": {
         "bcryptjs": "^3.0.2",
@@ -31,6 +33,7 @@
         "yaml": "^2.9.0"
     },
     "devDependencies": {
+        "@swc/core": "^1.15.41",
         "@types/bcryptjs": "^2.4.6",
         "@types/cookie-parser": "^1.4.10",
         "@types/cors": "^2.8.17",
@@ -44,6 +47,8 @@
         "@types/uuid": "^10.0.0",
         "ts-node-dev": "^2.0.0",
         "tsx": "^4.19.4",
-        "typescript": "^5.8.3"
+        "typescript": "^5.8.3",
+        "unplugin-swc": "^1.5.9",
+        "vitest": "^2.1.9"
     }
 }
