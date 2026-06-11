@@ -4,6 +4,7 @@ import {
     derivePreviewSubdomain,
     mergePreviewEnv,
     previewHostname,
+    isPreviewExpired,
     type PullRequestInfo,
 } from '../preview.helpers';
 
@@ -65,5 +66,21 @@ describe('mergePreviewEnv', () => {
 describe('previewHostname', () => {
     it('joins subdomain and base domain', () => {
         expect(previewHostname('pr-1-app-abc', 'preview.example.com')).toBe('pr-1-app-abc.preview.example.com');
+    });
+});
+
+describe('isPreviewExpired', () => {
+    const now = Date.parse('2026-06-11T00:00:00Z');
+    it('is false when there is no last activity', () => {
+        expect(isPreviewExpired(null, 7, now)).toBe(false);
+        expect(isPreviewExpired(undefined, 7, now)).toBe(false);
+    });
+    it('is false when within the TTL window', () => {
+        const sixDaysAgo = new Date(now - 6 * 24 * 3600 * 1000);
+        expect(isPreviewExpired(sixDaysAgo, 7, now)).toBe(false);
+    });
+    it('is true when older than the TTL window', () => {
+        const eightDaysAgo = new Date(now - 8 * 24 * 3600 * 1000);
+        expect(isPreviewExpired(eightDaysAgo, 7, now)).toBe(true);
     });
 });

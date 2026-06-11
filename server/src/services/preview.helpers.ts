@@ -47,3 +47,14 @@ export function mergePreviewEnv(
 export function previewHostname(subdomain: string, baseDomain: string): string {
     return `${subdomain}.${baseDomain}`;
 }
+
+/** True when a preview has been idle longer than its TTL (in days). */
+export function isPreviewExpired(
+    lastActivityAt: Date | string | null | undefined,
+    ttlDays: number,
+    nowMs: number,
+): boolean {
+    if (!lastActivityAt) return false;
+    const ageMs = nowMs - new Date(lastActivityAt).getTime();
+    return ageMs > ttlDays * 24 * 60 * 60 * 1000;
+}
