@@ -5,7 +5,7 @@ import { ProjectTeardownService } from './projectTeardown.service';
 import { ProcessService } from './process.service';
 import { GithubService } from './github.service';
 import { NotificationService } from './notification.service';
-import { isForkPR, derivePreviewSubdomain, mergePreviewEnv, previewHostname, type PullRequestInfo } from './preview.helpers';
+import { isForkPR, derivePreviewSubdomain, mergePreviewEnv, previewHostname, isPreviewExpired, type PullRequestInfo } from './preview.helpers';
 
 export type PullRequestAction = 'opened' | 'reopened' | 'synchronize' | 'closed' | string;
 
@@ -180,5 +180,49 @@ export class PreviewService {
         // Previews own no webhook, so no token is needed for teardown.
         await ProjectTeardownService.teardown(preview, undefined);
         return 'destroyed';
+    }
+
+    /** List a parent's preview environments, newest first. */
+    static async listForParent(parentProjectId: string): Promise<Project[]> {
+        return AppDataSource.getRepository(Project).find({
+            where: { parentProjectId, isPreview: true },
+            order: { createdAt: 'DESC' },
+        });
+    }
+
+    /**
+     * Manually destroy one preview (from the Previews tab). Verifies it belongs
+     * to the parent, then tears it down under the per-PR lock so it can't race
+     * a concurrent webhook event for the same PR. Returns false if not found.
+     */
+    static async destroyPreview(parentProjectId: string, previewId: string): Promise<boolean> {
+        const preview = await AppDataSource.getRepository(Project).findOne({
+            where: { id: previewId, parentProjectId, isPreview: true },
+            relations: ['githubRepo'],
+        });
+        if (!preview) return false;
+        const key = `${parentProjectId}:${preview.prNumber}`;
+        await PreviewService.withPreviewLock(key, () => ProjectTeardownService.teardown(preview, undefined));
+        return true;
+    }
+
+    /**
+     * Tear down previews idle longer than their parent's previewTtlDays.
+     * Fire-and-forget per preview (serialized per PR) so a batch never stalls
+     * the caller (the health-monitor interval).
+     */
+    static async reapExpired(nowMs: number): Promise<void> {
+        const previews = await AppDataSource.getRepository(Project).find({
+            where: { isPreview: true },
+            relations: ['parentProject', 'githubRepo'],
+        });
+        for (const preview of previews) {
+            const ttl = preview.parentProject?.previewTtlDays ?? 7;
+            if (isPreviewExpired(preview.lastActivityAt, ttl, nowMs)) {
+                const key = `${preview.parentProjectId}:${preview.prNumber}`;
+                PreviewService.withPreviewLock(key, () => ProjectTeardownService.teardown(preview, undefined))
+                    .catch((err) => console.error(`Failed to reap preview ${preview.id}:`, err));
+            }
+        }
     }
 }
