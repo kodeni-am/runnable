@@ -164,7 +164,8 @@ when the preview Project row is deleted.)
 The existing monitor sweep also selects previews where
 `lastActivityAt < now - parent.previewTtlDays` and tears them down **without
 awaiting** (mirroring the not-awaited `restartIfStillError` pattern), so a batch of
-expirations never stalls health checks.
+expirations never stalls health checks. `previewTtlDays` lives on the parent, so
+the sweep joins each preview to its parent (via `parentProjectId`) to read it.
 
 ## TLS & config
 
@@ -187,7 +188,10 @@ expirations never stalls health checks.
   instead of reading `config.hosting.baseDomain` directly, and emit `tls { on_demand }`
   for preview (APP/Caddy-type) sites. The three call sites that build the options
   object (`process.service.ts` doStart, `projects.routes.ts` reload-proxy,
-  `domain.service.ts` regenerate) pass the project's `baseDomain`.
+  `domain.service.ts` regenerate) pass the project's `baseDomain`. The override
+  only needs to thread through the **Caddy generator** — previews are APP-type, so
+  the Nginx/Apache generators (which also read `config.hosting.baseDomain`) are
+  never reached for previews and can keep reading the global value.
 - **One-time operator step (documented):** wildcard DNS `*.preview.example.com →
   server IP`. The lingering on-demand cert for a torn-down hostname stays in
   Caddy's storage harmlessly; no per-preview DNS or cert cleanup needed.
