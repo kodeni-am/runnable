@@ -6,6 +6,8 @@ import { promisify } from 'util';
 import { authenticate, requireRole } from '../middleware/auth';
 import { Role } from '../entities';
 import { config } from '../config';
+import { BuildCacheService } from '../services/buildCache.service';
+import { AppSettingsService } from '../services/appSettings.service';
 
 const execFileAsync = promisify(execFile);
 
@@ -173,6 +175,52 @@ router.get('/stats', async (_req, res, next: NextFunction) => {
         });
     } catch (error) {
         next(error);
+    }
+});
+
+// ── Build-cache GC (spec: docs/superpowers/specs/2026-06-11-build-cache-gc-cap-design.md) ──
+
+function dockerError(err: any): string {
+    const detail = String(err?.stderr || err?.message || 'unknown error').slice(0, 200);
+    return `Docker command failed: ${detail}`;
+}
+
+router.get('/build-cache', async (_req, res) => {
+    try {
+        const [usage, settings] = await Promise.all([
+            BuildCacheService.usage(),
+            AppSettingsService.get(),
+        ]);
+        res.json({
+            usageBytes: usage.daemonBytes + usage.buildkitBytes,
+            daemonBytes: usage.daemonBytes,
+            buildkitBytes: usage.buildkitBytes,
+            keepGB: settings.buildCacheKeepGB,
+        });
+    } catch (err: any) {
+        res.status(500).json({ error: dockerError(err) });
+    }
+});
+
+router.put('/build-cache', async (req, res, next: NextFunction) => {
+    try {
+        const keepGB = req.body?.keepGB;
+        if (!Number.isInteger(keepGB) || keepGB < 0 || keepGB > 500) {
+            return res.status(400).json({ error: 'keepGB must be an integer between 0 and 500' });
+        }
+        const settings = await AppSettingsService.update({ buildCacheKeepGB: keepGB });
+        res.json({ keepGB: settings.buildCacheKeepGB });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/build-cache/prune', async (_req, res) => {
+    try {
+        const { freedBytes } = await BuildCacheService.pruneToCap();
+        res.json({ freedBytes });
+    } catch (err: any) {
+        res.status(500).json({ error: dockerError(err) });
     }
 });
 
