@@ -14,6 +14,7 @@ import { ProcessService } from '../services/process.service';
 import { HealthMonitorService } from '../services/healthMonitor.service';
 import { ServerConfigService } from '../services/serverConfig.service';
 import { GithubService } from '../services/github.service';
+import { ProjectProvisioningService } from '../services/projectProvisioning.service';
 import { getTemplate } from '../templates/catalog';
 import { config } from '../config';
 
@@ -51,9 +52,9 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
 });
 
 /**
- * Shared provisioning path for both plain project creation and one-click
- * templates: permission checks, subdomain validation/uniqueness, port
- * allocation, entity creation, and sandbox setup (with rollback).
+ * User-facing project creation: enforce global user permissions, the
+ * maxProjects quota (previews excluded), and allowed server types, then
+ * delegate to ProjectProvisioningService for the actual provisioning.
  */
 async function provisionProject(
     user: User,
@@ -62,81 +63,27 @@ async function provisionProject(
     serverType: ServerType,
     extras: Partial<Project> = {},
 ): Promise<Project> {
-    // Check global user permissions
     const userPerms = user.permissions ?? DEFAULT_USER_PERMISSIONS;
     if (!userPerms.canCreateProjects && user.role !== Role.ADMIN) {
         throw new AppError('You are not allowed to create projects', 403);
     }
 
-    // Check maxProjects
+    // Check maxProjects — count only the user's own NON-preview projects.
     if (userPerms.maxProjects !== null && userPerms.maxProjects !== undefined && user.role !== Role.ADMIN) {
         const projectRepo = AppDataSource.getRepository(Project);
-        const count = await projectRepo.count({ where: { userId: user.id } });
+        const count = await projectRepo.count({ where: { userId: user.id, isPreview: false } });
         if (count >= userPerms.maxProjects) {
             throw new AppError(`You have reached your maximum of ${userPerms.maxProjects} project(s)`, 403);
         }
     }
 
-    // Check allowed server types
     if (userPerms.allowedServerTypes && userPerms.allowedServerTypes.length > 0 && user.role !== Role.ADMIN) {
         if (!userPerms.allowedServerTypes.includes(serverType)) {
             throw new AppError(`Server type "${serverType}" is not allowed for your account`, 403);
         }
     }
 
-    // Validate subdomain format
-    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(subdomain)) {
-        throw new AppError('Subdomain must be lowercase alphanumeric with hyphens', 400);
-    }
-
-    const projectRepo = AppDataSource.getRepository(Project);
-
-    // Check uniqueness
-    const existing = await projectRepo.findOne({ where: { subdomain } });
-    if (existing) {
-        throw new AppError('Subdomain is already taken', 409);
-    }
-
-    // Allocate port (start from 9000, find next available)
-    // Use internalPort (the container-side port) for allocation — project.port
-    // gets overwritten with the dynamic host port after each run and cannot be
-    // used to determine the highest assigned container port.
-    // Compose projects are excluded: their internalPort is the template's
-    // fixed container port (e.g. 27017), which would poison the watermark.
-    const lastProject = await projectRepo
-        .createQueryBuilder('project')
-        .where('project.useCompose = :useCompose', { useCompose: false })
-        .orderBy('project.internalPort', 'DESC', 'NULLS LAST')
-        .getOne();
-    const port = (lastProject?.internalPort || 8999) + 1;
-
-    const directoryPath = path.join(config.hosting.servDir, subdomain);
-
-    // Create sandbox (or just directory)
-    const project = projectRepo.create({
-        name,
-        subdomain,
-        directoryPath,
-        serverType,
-        status: ServiceStatus.STOPPED,
-        port,
-        internalPort: port, // always set so port allocation and start() can rely on this
-        userId: user.id,
-        ...extras,
-    });
-
-    // Save first to get the generated UUID
-    await projectRepo.save(project);
-
-    try {
-        await SandboxService.createSandbox(project.id, directoryPath);
-    } catch (error) {
-        // Rollback if sandbox creation fails
-        await projectRepo.remove(project);
-        throw error;
-    }
-
-    return project;
+    return ProjectProvisioningService.provisionCore(user, name, subdomain, serverType, extras);
 }
 
 // Create project (with global permission checks)
