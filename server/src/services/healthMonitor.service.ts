@@ -3,6 +3,7 @@ import { Project, ServerType, ServiceStatus } from '../entities';
 import { SandboxService } from './sandbox.service';
 import { ProcessService } from './process.service';
 import { NotificationService } from './notification.service';
+import { PreviewService } from './preview.service';
 
 interface HealthState {
     consecutiveFailures: number;
@@ -25,6 +26,9 @@ export class HealthMonitorService {
         HealthMonitorService.timer = setInterval(() => {
             HealthMonitorService.checkAll().catch(err =>
                 console.error('Health monitor sweep failed:', err)
+            );
+            PreviewService.reapExpired(Date.now()).catch(err =>
+                console.error('Preview TTL reap failed:', err)
             );
         }, CHECK_INTERVAL_MS);
         // Don't keep the process alive just for the monitor
