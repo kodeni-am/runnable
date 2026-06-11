@@ -27,6 +27,27 @@ interface ManagedProcess {
 
 const managedProcesses = new Map<string, ManagedProcess>();
 
+// Zero-downtime deploy tuning. The health gate is generous because the
+// legacy path never verified listening at all — a slow-booting app (long
+// migrations) must not become undeployable; it degrades to a warned cutover.
+const HEALTH_GATE_TIMEOUT_MS = 180_000;
+const HEALTH_PROBE_INTERVAL_MS = 1_000;
+const RETIRE_GRACE_MS = 10_000;
+
+export interface DeployOutcome {
+    strategy: DeployStrategy;
+    healthGate: HealthGateResult;
+    strategyReason?: string;
+}
+
+export interface RedeployResult {
+    ran: boolean;
+    strategy?: DeployStrategy;
+    healthGate?: HealthGateResult;
+    strategyReason?: string;
+    durationMs?: number;
+}
+
 export class ProcessService {
     private static io: any;
 
@@ -579,6 +600,346 @@ export class ProcessService {
         for (const name of composeGenerations(base)) {
             if (keep.includes(name)) continue;
             await ProcessService.removeComposeGeneration(project, name);
+        }
+    }
+
+    // ── Zero-downtime deploy engine ──────────────────────────────────────────
+
+    static emitDeployProgress(projectId: string, phase: DeployPhase, strategy: DeployStrategy, message?: string) {
+        if (ProcessService.io) {
+            ProcessService.io.to(`project:${projectId}`).emit('deploy:progress',
+                { projectId, phase, strategy, message, ts: Date.now() });
+        }
+    }
+
+    static emitDeployFinished(projectId: string, payload: {
+        outcome: 'success' | 'failed-still-serving' | 'failed-down';
+        strategy?: DeployStrategy;
+        durationMs: number;
+        healthGate?: HealthGateResult;
+    }) {
+        if (ProcessService.io) {
+            ProcessService.io.to(`project:${projectId}`).emit('deploy:finished', { projectId, ...payload });
+        }
+    }
+
+    /** Compose-aware "is the active container/stack actually up". */
+    private static async isActiveLive(project: Project): Promise<boolean> {
+        try {
+            return await HealthMonitorService.isContainerRunning(project);
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Health gate: any HTTP response on the published port counts as ready.
+     * 'degraded' when nothing answered within the timeout but the workload is
+     * still alive — we cut over anyway ("never worse than today": the legacy
+     * path never verified listening at all). Throws when the workload died.
+     */
+    private static async healthGate(
+        project: Project,
+        hostPort: number,
+        stillAlive: () => Promise<boolean>,
+        buildLogPath: string,
+        strategy: DeployStrategy,
+    ): Promise<HealthGateResult> {
+        ProcessService.emitDeployProgress(project.id, 'health-check', strategy);
+        const deadline = Date.now() + HEALTH_GATE_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+            if (await probeHttp(hostPort)) {
+                await fs.appendFile(buildLogPath, `[Health gate] HTTP response on :${hostPort} — ready\n`);
+                return 'passed';
+            }
+            if (!(await stillAlive())) {
+                throw new Error('New container exited before responding to HTTP');
+            }
+            await new Promise(r => setTimeout(r, HEALTH_PROBE_INTERVAL_MS));
+        }
+        await fs.appendFile(buildLogPath,
+            `[Health gate] ⚠ No HTTP response after ${HEALTH_GATE_TIMEOUT_MS / 1000}s but the container is running — ` +
+            `switching traffic anyway (degraded pass)\n`);
+        return 'degraded';
+    }
+
+    /** Regenerate + write the proxy config for the given port. Returns the config path. */
+    private static async writeProxyConfig(project: Project, port: number): Promise<string> {
+        const content = await ServerConfigService.generateConfig({
+            subdomain: project.subdomain,
+            directoryPath: project.directoryPath,
+            port,
+            serverType: project.serverType,
+            customDomains: (project.customDomains || []).map((cd: any) => ({
+                domain: cd.domain,
+                redirectTarget: cd.redirectTarget || null,
+            })),
+            baseDomain: project.baseDomain || undefined,
+            onDemandTls: project.isPreview === true,
+        });
+        return ServerConfigService.writeConfig(project.subdomain, content, project.serverType);
+    }
+
+    /**
+     * Cutover: config file → strict reload. On reload failure the file is
+     * rolled back to the old port and best-effort reloaded — the on-disk
+     * config must never disagree with what Caddy serves, because any other
+     * project's lifecycle op reloads globally and would silently activate it.
+     * Returns the written config path.
+     */
+    private static async switchProxy(project: Project, newPort: number, oldPort: number): Promise<string> {
+        const configPath = await ProcessService.writeProxyConfig(project, newPort);
+        try {
+            await ServerConfigService.reloadCaddy({ strict: true });
+        } catch (err) {
+            await ProcessService.writeProxyConfig(project, oldPort).catch(() => { });
+            await ServerConfigService.reloadCaddy();
+            throw err;
+        }
+        return configPath;
+    }
+
+    /**
+     * Zero-downtime deploy: the active container/stack keeps serving while
+     * the new version builds. Throws DeployError on failure; never records
+     * Deployment rows or sends notifications (callers own those).
+     */
+    static async doDeploy(projectId: string): Promise<DeployOutcome> {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const project = await projectRepo.findOne({
+            where: { id: projectId },
+            relations: ['customDomains'],
+        });
+        if (!project) throw new Error('Project not found');
+
+        HealthMonitorService.reset(projectId);
+        ProcessService.emitStatus(projectId, ServiceStatus.DEPLOYING);
+
+        const buildLogPath = ProcessService.buildLogPathFor(project);
+        await fs.mkdir(path.dirname(buildLogPath), { recursive: true });
+        await fs.writeFile(buildLogPath, `Deploying project ${project.name} (${projectId}) — zero-downtime\n`);
+
+        const detection = await DetectService.detect(project.directoryPath);
+        const userEnv = typeof project.envVars === 'string'
+            ? JSON.parse(project.envVars)
+            : (project.envVars || {});
+        const useCompose = project.useCompose || detection.useCompose;
+        const composeFile = project.composeFile || detection.composeFile || 'docker-compose.yml';
+
+        let strategy: DeployStrategy = 'blue-green';
+        let strategyReason: string | undefined;
+        try {
+            if (!useCompose) {
+                const effectiveBuildCommand = project.buildCommand || detection.buildCommand;
+                const healthGate = await ProcessService.deploySingleBlueGreen(
+                    project, projectRepo, effectiveBuildCommand, userEnv, buildLogPath);
+                return await ProcessService.finishDeploy(project, projectRepo, { strategy, healthGate });
+            }
+
+            const composeName = project.containerId!;
+            const doc = await ProcessService.validateComposeAndWriteEnv(
+                project, userEnv, buildLogPath, composeName, composeFile);
+            const safety = assessParallelSafety(doc);
+
+            if (safety.safeToParallel) {
+                await fs.appendFile(buildLogPath, `Zero-downtime: blue-green (stack is safe to run twice)\n`);
+                const healthGate = await ProcessService.deployComposeBlueGreen(
+                    project, projectRepo, buildLogPath, composeFile);
+                return await ProcessService.finishDeploy(project, projectRepo, { strategy, healthGate });
+            }
+
+            strategy = 'compose-inplace';
+            strategyReason = safety.reasons.join('; ');
+            await fs.appendFile(buildLogPath, `Zero-downtime: in-place update (${strategyReason})\n`);
+            await ProcessService.deployComposeInPlace(project, projectRepo, buildLogPath, composeFile);
+            return await ProcessService.finishDeploy(project, projectRepo,
+                { strategy, healthGate: 'passed', strategyReason });
+        } catch (err: any) {
+            if (err instanceof DeployError) throw err;
+            // Verify, never assume: the old workload may have died on its own
+            // during a long build.
+            const stillServing = await ProcessService.isActiveLive(project);
+            if (stillServing) {
+                await projectRepo.update(projectId, { status: ServiceStatus.RUNNING });
+            }
+            await fs.appendFile(buildLogPath, `\n❌ Deploy failed: ${err?.message}\n` +
+                (stillServing ? '✓ Previous version kept serving — visitors saw nothing.\n' : ''));
+            throw new DeployError(err?.message || 'Deploy failed', stillServing, strategy);
+        }
+    }
+
+    private static async finishDeploy(
+        project: Project,
+        projectRepo: ReturnType<typeof AppDataSource.getRepository<Project>>,
+        outcome: DeployOutcome,
+    ): Promise<DeployOutcome> {
+        project.status = ServiceStatus.RUNNING;
+        await projectRepo.save(project);
+        ProcessService.emitDeployProgress(project.id, 'done', outcome.strategy);
+        ProcessService.emitStatus(project.id, ServiceStatus.RUNNING);
+        // Opportunistic build-cache GC — same fire-and-forget as doStart
+        void BuildCacheService.enforceCap();
+        return outcome;
+    }
+
+    /** Tier 1: single-container blue-green. */
+    private static async deploySingleBlueGreen(
+        project: Project,
+        projectRepo: ReturnType<typeof AppDataSource.getRepository<Project>>,
+        effectiveBuildCommand: string | undefined,
+        userEnv: Record<string, string>,
+        buildLogPath: string,
+    ): Promise<HealthGateResult> {
+        const base = `runnable-${project.id.substring(0, 8)}`;
+        const imageName = `runnable-img-${project.id.substring(0, 8)}`;
+
+        // Sweep orphans of crashed deploys; adopt the survivor of a crash
+        // between proxy switch and DB persist.
+        const adopted = await ProcessService.sweepContainerGenerations(project, [project.containerId!], true);
+        if (adopted) {
+            await fs.appendFile(buildLogPath, `Adopted live generation ${adopted} left by an interrupted deploy\n`);
+            project.containerId = adopted;
+            await projectRepo.save(project);
+        }
+        const active = project.containerId!;
+        const oldPort = project.port!;
+        const incoming = nextContainerGeneration(base, active);
+
+        const oldImageId = (await SandboxService.exec(project.id, 'docker',
+            ['inspect', '--format', '{{.Image}}', active])).stdout.trim();
+
+        ProcessService.emitDeployProgress(project.id, 'building', 'blue-green');
+        await ProcessService.buildAppImage(project, effectiveBuildCommand, userEnv, buildLogPath);
+
+        let healthGate: HealthGateResult;
+        try {
+            ProcessService.emitDeployProgress(project.id, 'starting', 'blue-green');
+            const hostPort = await ProcessService.runAppContainerAndWaitForPort(
+                project, incoming, userEnv, buildLogPath);
+
+            healthGate = await ProcessService.healthGate(
+                project, hostPort,
+                async () => {
+                    const s = await SandboxService.exec(project.id, 'docker',
+                        ['inspect', '--format', '{{.State.Status}}', incoming]);
+                    return s.stdout.trim() === 'running';
+                },
+                buildLogPath, 'blue-green');
+
+            ProcessService.emitDeployProgress(project.id, 'switching', 'blue-green');
+            const configPath = await ProcessService.switchProxy(project, hostPort, oldPort);
+
+            // Persist AFTER the successful reload: on reload failure the DB
+            // must still name the old, healthy container.
+            project.containerId = incoming;
+            project.port = hostPort;
+            project.configPath = configPath;
+            await projectRepo.save(project);
+        } catch (err) {
+            // Single cleanup funnel for every post-build failure path — a
+            // missed path would leak a --restart unless-stopped orphan.
+            await SandboxService.exec(project.id, 'docker', ['rm', '-f', incoming]).catch(() => { });
+            const builtId = (await SandboxService.exec(project.id, 'docker',
+                ['inspect', '--format', '{{.Id}}', imageName]).catch(() => ({ stdout: '' } as any))).stdout.trim();
+            if (builtId && builtId !== oldImageId) {
+                // The failed build's image would dangle untracked at the next
+                // re-tag; nothing else ever collects it.
+                await SandboxService.exec(project.id, 'docker', ['rmi', '-f', builtId]).catch(() => { });
+            }
+            throw err;
+        }
+
+        // Retire the old generation. The DB already points at the new
+        // container, so a crash from here on only leaves an idempotent
+        // retirement for the next sweep.
+        ProcessService.emitDeployProgress(project.id, 'retiring', 'blue-green');
+        await new Promise(r => setTimeout(r, RETIRE_GRACE_MS));
+        await SandboxService.exec(project.id, 'docker', ['stop', active]).catch(() => { });
+        await SandboxService.exec(project.id, 'docker', ['rm', '-f', active]).catch(() => { });
+        if (oldImageId) {
+            const currentId = (await SandboxService.exec(project.id, 'docker',
+                ['inspect', '--format', '{{.Id}}', imageName]).catch(() => ({ stdout: '' } as any))).stdout.trim();
+            // Skip when the rebuild was byte-identical (e.g. rollback to the
+            // deployed commit) — old and new are the same image.
+            if (currentId && currentId !== oldImageId) {
+                await SandboxService.exec(project.id, 'docker', ['rmi', '-f', oldImageId]).catch(() => { });
+            }
+        }
+        return healthGate;
+    }
+
+    /** Tier 2: compose blue-green — a parallel stack under a generation project name. */
+    private static async deployComposeBlueGreen(
+        project: Project,
+        projectRepo: ReturnType<typeof AppDataSource.getRepository<Project>>,
+        buildLogPath: string,
+        composeFile: string,
+    ): Promise<HealthGateResult> {
+        const base = `runnable-${project.id.substring(0, 8)}`;
+        const oldName = project.containerId!;
+        const oldPort = project.port!;
+        const incoming = nextComposeGeneration(base, oldName);
+
+        await ProcessService.sweepComposeGenerations(project, [oldName]);
+
+        let healthGate: HealthGateResult;
+        try {
+            ProcessService.emitDeployProgress(project.id, 'building', 'blue-green');
+            const hostPort = await ProcessService.composeUpAndWaitForPort(
+                project, incoming, buildLogPath, composeFile);
+
+            healthGate = await ProcessService.healthGate(
+                project, hostPort,
+                async () => {
+                    const ps = await SandboxService.exec(project.id, 'docker',
+                        ['ps', '-q', '--filter', `label=com.docker.compose.project=${incoming}`]);
+                    return ps.stdout.trim().length > 0;
+                },
+                buildLogPath, 'blue-green');
+
+            ProcessService.emitDeployProgress(project.id, 'switching', 'blue-green');
+            const configPath = await ProcessService.switchProxy(project, hostPort, oldPort);
+
+            project.containerId = incoming;
+            project.port = hostPort;
+            project.configPath = configPath;
+            await projectRepo.save(project);
+        } catch (err) {
+            await ProcessService.removeComposeGeneration(project, incoming);
+            throw err;
+        }
+
+        ProcessService.emitDeployProgress(project.id, 'retiring', 'blue-green');
+        await new Promise(r => setTimeout(r, RETIRE_GRACE_MS));
+        await ProcessService.removeComposeGeneration(project, oldName);
+        return healthGate;
+    }
+
+    /**
+     * Tier 3: stateful stack — same project name, no `down`. Compose diffs
+     * and recreates only changed services, so an unchanged database is not
+     * touched at all; the build happens before any recreation, so downtime is
+     * limited to the changed services' restart.
+     */
+    private static async deployComposeInPlace(
+        project: Project,
+        projectRepo: ReturnType<typeof AppDataSource.getRepository<Project>>,
+        buildLogPath: string,
+        composeFile: string,
+    ): Promise<void> {
+        const composeName = project.containerId!;
+        const oldPort = project.port!;
+
+        ProcessService.emitDeployProgress(project.id, 'updating-services', 'compose-inplace');
+        const hostPort = await ProcessService.composeUpAndWaitForPort(
+            project, composeName, buildLogPath, composeFile, ['--remove-orphans']);
+
+        if (hostPort !== oldPort) {
+            ProcessService.emitDeployProgress(project.id, 'switching', 'compose-inplace');
+            const configPath = await ProcessService.switchProxy(project, hostPort, oldPort);
+            project.port = hostPort;
+            project.configPath = configPath;
+            await projectRepo.save(project);
         }
     }
 
