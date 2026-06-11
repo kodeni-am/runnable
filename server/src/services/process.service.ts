@@ -203,7 +203,6 @@ export class ProcessService {
                     // Store the compose project name in containerId so stop/logs can reference it
                     // Also persist the env file path so stop() can clean it up
                     project.containerId = composeName;
-                    project.internalPort = internalPort;
                     project.port = actualPort;
 
                 } else {
@@ -317,9 +316,10 @@ export class ProcessService {
 
                     actualPort = actualHostPort;
 
-                    // Save container information to database
+                    // Save container information to database. internalPort is left as
+                    // stored — writing the 8080 fallback back would make a cleared
+                    // (null) internal port silently reappear in the settings UI.
                     project.containerId = containerName;
-                    project.internalPort = internalPort;
                     project.port = actualPort; // update the proxied port for ServerConfigService
                 }
             } catch (err: any) {
@@ -439,13 +439,27 @@ export class ProcessService {
      * inside the project lock so it cannot mutate the working tree while an
      * in-flight build is copying it. Bursts coalesce: if a redeploy is already
      * queued behind a running one, new requests are dropped — the queued run
-     * pulls the latest code anyway.
+     * pulls the latest code anyway. Returns false when the request was
+     * dropped, so callers don't record a deployment that never ran.
      */
-    static redeploy(projectId: string, prepare: () => Promise<void>): Promise<void> {
-        if (ProcessService.queuedRedeploys.has(projectId)) return Promise.resolve();
+    static redeploy(projectId: string, prepare: () => Promise<void>): Promise<boolean> {
+        if (ProcessService.queuedRedeploys.has(projectId)) return Promise.resolve(false);
         ProcessService.queuedRedeploys.add(projectId);
         return ProcessService.withProjectLock(projectId, async () => {
             ProcessService.queuedRedeploys.delete(projectId);
+            await prepare();
+            await ProcessService.doStop(projectId);
+            await ProcessService.doStart(projectId);
+            return true;
+        });
+    }
+
+    /**
+     * Like redeploy(), but never coalesced. Used for rollbacks, where dropping
+     * the request would leave the project on the wrong commit.
+     */
+    static redeployExclusive(projectId: string, prepare: () => Promise<void>): Promise<void> {
+        return ProcessService.withProjectLock(projectId, async () => {
             await prepare();
             await ProcessService.doStop(projectId);
             await ProcessService.doStart(projectId);

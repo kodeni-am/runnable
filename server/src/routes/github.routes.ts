@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AppDataSource } from '../config/data-source';
-import { Project, GithubRepo, User } from '../entities';
+import { Project, GithubRepo, User, Deployment } from '../entities';
 import { ProjectPermission } from '../entities/enums';
 import { authenticate, requireApproval, requireProjectAccess, AuthRequest } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
@@ -62,8 +62,17 @@ router.post('/webhooks/github', async (req: Request, res: Response, next: NextFu
             return;
         }
 
-        // Trigger deploy
-        await GithubService.handlePushEvent(githubRepo.project.id);
+        // Branch deletions carry an all-zeros `after` SHA and nothing to deploy
+        if (req.body.deleted === true) {
+            res.json({ message: 'Branch deletion ignored' });
+            return;
+        }
+
+        // Trigger deploy, recording the pushed commit for the deployment history
+        await GithubService.handlePushEvent(githubRepo.project.id, {
+            sha: req.body.after,
+            message: req.body.head_commit?.message,
+        });
         res.json({ message: 'Deployment triggered' });
     } catch (error) {
         next(error);
@@ -169,6 +178,32 @@ router.delete('/:id/github/disconnect', requireProjectAccess(ProjectPermission.C
 
         await AppDataSource.getRepository(GithubRepo).remove(project.githubRepo);
         res.json({ message: 'GitHub repo disconnected' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// List deployment history (newest first)
+router.get('/:id/deployments', requireProjectAccess(ProjectPermission.CAN_VIEW_GITHUB), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const deployments = await AppDataSource.getRepository(Deployment).find({
+            where: { projectId: project.id },
+            order: { createdAt: 'DESC' },
+            take: 50,
+        });
+        res.json(deployments);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Roll back to the commit of a previous deployment (lifecycle op → canStart)
+router.post('/:id/deployments/:deploymentId/rollback', requireProjectAccess(ProjectPermission.CAN_START), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const deployment = await GithubService.rollbackToDeployment(project.id, req.params.deploymentId as string);
+        res.json(deployment);
     } catch (error) {
         next(error);
     }

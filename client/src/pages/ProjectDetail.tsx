@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
-import { projectsApi, type Project, type Collaborator, type ProjectPermissions } from '../api/projects';
+import { projectsApi, type Project, type Collaborator, type ProjectPermissions, type Deployment } from '../api/projects';
 import { useAuthStore } from '../store/authStore';
 import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
@@ -30,10 +30,10 @@ const DEFAULT_COLLAB_PERMS: ProjectPermissions = {
 export default function ProjectDetail() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
-    const { currentProject, fetchProject, deleteProject } = useProjectStore();
+    const { currentProject, fetchProject, deleteProject, error: projectError } = useProjectStore();
     const { user: currentUser } = useAuthStore();
     usePageTitle(currentProject ? currentProject.name : 'Project Details');
-    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'domains' | 'logs' | 'containers' | 'settings' | 'collaborators'>('overview');
+    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'deployments' | 'domains' | 'logs' | 'containers' | 'settings' | 'collaborators'>('overview');
     const [actionLoading, setActionLoading] = useState('');
 
     // GitHub connect state
@@ -53,6 +53,12 @@ export default function ProjectDetail() {
     const [showEditRedirect, setShowEditRedirect] = useState(false);
     const [editingDomain, setEditingDomain] = useState<any>(null);
     const [editRedirectTarget, setEditRedirectTarget] = useState('');
+
+    // Deployment history state
+    const [deployments, setDeployments] = useState<Deployment[]>([]);
+    const [deploymentsLoading, setDeploymentsLoading] = useState(false);
+    const [rollbackLoading, setRollbackLoading] = useState('');
+    const [deploymentsError, setDeploymentsError] = useState('');
 
     // Delete state
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -120,6 +126,7 @@ export default function ProjectDetail() {
     useEffect(() => {
         if (id && tab === 'domains') loadDomains();
         if (id && tab === 'collaborators') loadCollaborators();
+        if (id && tab === 'deployments') loadDeployments();
     }, [id, tab]);
 
     const loadDomains = async () => {
@@ -138,6 +145,34 @@ export default function ProjectDetail() {
             setCollaborators(data);
         } catch { }
         setCollabLoading(false);
+    };
+
+    const loadDeployments = async () => {
+        if (!id) return;
+        setDeploymentsLoading(true);
+        setDeploymentsError('');
+        try {
+            const { data } = await projectsApi.listDeployments(id);
+            setDeployments(data);
+        } catch (err: any) {
+            setDeploymentsError(err.response?.data?.error || 'Failed to load deployments');
+        }
+        setDeploymentsLoading(false);
+    };
+
+    const handleRollback = async (deployment: Deployment) => {
+        if (!id || !deployment.commitSha) return;
+        const shortSha = deployment.commitSha.slice(0, 7);
+        if (!confirm(`Roll back to commit ${shortSha}? The project will be rebuilt and restarted at that commit.`)) return;
+        setRollbackLoading(deployment.id);
+        try {
+            await projectsApi.rollbackDeployment(id, deployment.id);
+            await Promise.all([loadDeployments(), fetchProject(id)]);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Rollback failed');
+            loadDeployments();
+        }
+        setRollbackLoading('');
     };
 
     const handleAction = async (action: 'start' | 'stop' | 'restart') => {
@@ -255,9 +290,13 @@ export default function ProjectDetail() {
                 useCompose,
                 composeFile: composeFile || 'docker-compose.yml',
                 composeService,
-                ...(parsedPort !== undefined ? { internalPort: parsedPort } : {}),
+                internalPort: parsedPort ?? null,
             });
-            await fetchProject(id);
+            const refreshed = await fetchProject(id);
+            if (refreshed) {
+                // Re-sync form fields so the UI reflects what the server stored
+                setInternalPort(refreshed.internalPort != null ? String(refreshed.internalPort) : '');
+            }
             setSaveSuccess(true);
             setTimeout(() => setSaveSuccess(false), 3000);
         } catch (err) {
@@ -350,9 +389,18 @@ export default function ProjectDetail() {
     if (!currentProject) {
         return (
             <Layout>
-                <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
-                    <div className="spinner" style={{ width: 40, height: 40 }} />
-                </div>
+                {projectError ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: 60 }}>
+                        <p style={{ color: 'var(--danger, #e5484d)' }}>{projectError}</p>
+                        <button className="btn btn-secondary" onClick={() => navigate('/')}>
+                            Back to Dashboard
+                        </button>
+                    </div>
+                ) : (
+                    <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
+                        <div className="spinner" style={{ width: 40, height: 40 }} />
+                    </div>
+                )}
             </Layout>
         );
     }
@@ -361,9 +409,12 @@ export default function ProjectDetail() {
 
     // Build tabs list based on permissions
     const availableTabs: typeof tab[] = ['overview'];
-    if (canViewFiles || canEditFiles) availableTabs.push('files');
+    // Viewing is a prerequisite for the tab to function — the list endpoints
+    // require the view permission even when the user can edit.
+    if (canViewFiles) availableTabs.push('files');
     if (canViewGithub) availableTabs.push('github');
-    if (canViewDomains || canEditDomains) availableTabs.push('domains');
+    if (canViewGithub && p?.githubRepo) availableTabs.push('deployments');
+    if (canViewDomains) availableTabs.push('domains');
     if (canViewLogs) availableTabs.push('logs');
     if (canViewLogs && p?.serverType === 'app') availableTabs.push('containers');
     if (canViewSettings || canEditConfig) availableTabs.push('settings');
@@ -525,6 +576,74 @@ export default function ProjectDetail() {
                                         <button className="btn btn-primary" onClick={handleGithubConnect} disabled={!repoUrl}>Connect</button>
                                     </div>
                                 </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* DEPLOYMENTS TAB */}
+                {tab === 'deployments' && (
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                            <h3>Deployment History</h3>
+                            <button className="btn btn-secondary" onClick={loadDeployments} disabled={deploymentsLoading}>
+                                <RotateCcw size={16} /> Refresh
+                            </button>
+                        </div>
+
+                        {deploymentsError && <div className="alert alert-error">{deploymentsError}</div>}
+
+                        {deploymentsLoading ? (
+                            <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                                <div className="spinner" />
+                            </div>
+                        ) : deployments.length === 0 ? (
+                            <div className="empty-state">
+                                <div className="empty-state-icon"><FolderGit2 size={36} /></div>
+                                <h2>No deployments yet</h2>
+                                <p>Deployments are recorded when GitHub pushes trigger an auto-deploy</p>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                {deployments.map((d, index) => (
+                                    <div key={d.id} className="glass" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', borderRadius: 10 }}>
+                                        {d.status === 'success'
+                                            ? <CheckCircle2 size={20} style={{ color: 'var(--status-success, #46a758)', flexShrink: 0 }} />
+                                            : <XCircle size={20} style={{ color: 'var(--status-error, #e5484d)', flexShrink: 0 }} />}
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                                {d.commitSha && (
+                                                    <code style={{ fontSize: 13, fontFamily: 'monospace' }}>{d.commitSha.slice(0, 7)}</code>
+                                                )}
+                                                <span style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {d.commitMessage?.split('\n')[0] || (d.status === 'failed' ? d.error : '') || '—'}
+                                                </span>
+                                                {d.trigger === 'rollback' && (
+                                                    <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(255, 180, 100, 0.15)', color: '#ffb464' }}>
+                                                        Rollback
+                                                    </span>
+                                                )}
+                                                {index === 0 && d.status === 'success' && (
+                                                    <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(100, 180, 255, 0.15)', color: '#64b4ff' }}>
+                                                        Current
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                {d.branch} · {new Date(d.createdAt).toLocaleString()}
+                                            </div>
+                                        </div>
+                                        {canStart && d.commitSha && d.status === 'success' && index !== 0 && (
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={() => handleRollback(d)}
+                                                disabled={!!rollbackLoading}
+                                            >
+                                                {rollbackLoading === d.id ? <span className="spinner" /> : <RotateCcw size={14} />} Roll back
+                                            </button>
+                                        )}
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </div>

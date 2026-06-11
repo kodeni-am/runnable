@@ -41,7 +41,7 @@ export interface Project {
     port?: number;
     configPath?: string;
     containerId?: string;
-    internalPort?: number;
+    internalPort?: number | null;
     buildCommand?: string;
     startCommand?: string;
     envVars?: Record<string, string>;
@@ -75,6 +75,18 @@ export interface CreateProjectData {
     serverType: string;
 }
 
+export interface Deployment {
+    id: string;
+    projectId: string;
+    commitSha?: string | null;
+    commitMessage?: string | null;
+    branch: string;
+    status: 'success' | 'failed';
+    trigger: 'webhook' | 'rollback';
+    error?: string | null;
+    createdAt: string;
+}
+
 export const projectsApi = {
     list: () => api.get<Project[]>('/projects'),
     get: (id: string) => api.get<Project>(`/projects/${id}`),
@@ -101,6 +113,11 @@ export const projectsApi = {
     connectGithub: (id: string, repoUrl: string, branch?: string) =>
         api.post(`/projects/${id}/github/connect`, { repoUrl, branch }),
     disconnectGithub: (id: string) => api.delete(`/projects/${id}/github/disconnect`),
+
+    // Deployments
+    listDeployments: (id: string) => api.get<Deployment[]>(`/projects/${id}/deployments`),
+    rollbackDeployment: (id: string, deploymentId: string) =>
+        api.post<Deployment>(`/projects/${id}/deployments/${deploymentId}/rollback`),
 
     // Custom domains
     listDomains: (id: string) => api.get(`/projects/${id}/domains`),
