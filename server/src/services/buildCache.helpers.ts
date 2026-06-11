@@ -45,19 +45,22 @@ export function parseBuildctlDu(stdout: string): number {
 
 // A cap of 0 means "no cap": enforcement is skipped, and an explicit
 // prune request reclaims everything instead.
-export function builderPruneArgs(keepGB: number): string[] {
+// Current Docker (buildx >= 0.17) calls the cap --max-used-space; older
+// versions call it --keep-storage. The service tries modern first and
+// falls back on unknown-flag errors.
+export function builderPruneArgsModern(keepGB: number): string[] {
+    if (keepGB <= 0) return ['builder', 'prune', '-af'];
+    return ['builder', 'prune', '-f', '--max-used-space', `${keepGB}GB`];
+}
+
+export function builderPruneArgsLegacy(keepGB: number): string[] {
     if (keepGB <= 0) return ['builder', 'prune', '-af'];
     return ['builder', 'prune', '-f', '--keep-storage', `${keepGB}GB`];
 }
 
-export function buildctlPruneArgsModern(keepGB: number): string[] {
-    const base = ['exec', BUILDKIT_CONTAINER, 'buildctl', 'prune'];
-    if (keepGB <= 0) return base;
-    return [...base, '--max-used-space', `${keepGB}GB`];
-}
-
-// Older buildkit: --keep-storage takes a plain megabyte integer.
-export function buildctlPruneArgsLegacy(keepGB: number): string[] {
+// buildctl prune's cap flag is --keep-storage, a plain megabyte integer
+// (verified on buildkit v0.29; it has no --max-used-space).
+export function buildctlPruneArgs(keepGB: number): string[] {
     const base = ['exec', BUILDKIT_CONTAINER, 'buildctl', 'prune'];
     if (keepGB <= 0) return base;
     return [...base, '--keep-storage', String(Math.round(keepGB * 1000))];

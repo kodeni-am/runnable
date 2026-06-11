@@ -12,7 +12,7 @@
 - All server commands run from `server/`: tests `npm test`, typecheck `npm run build`.
 - All client commands run from `client/`: typecheck+build `npm run build`.
 - Docker/buildctl sizes are SI-decimal (`kB`=1e3, `MB`=1e6, `GB`=1e9) — that is what `docker system df` and `buildctl du` print.
-- Modern buildkit renamed `buildctl prune --keep-storage` to `--max-used-space`. The service tries the modern flag first and falls back to the legacy one (MB integer) on "unknown flag" errors. `docker builder prune --keep-storage` works on all relevant Docker versions (deprecated alias of `--max-used-space` on the newest).
+- Flag reality (verified on production, Docker 29.4.3 + buildkit v0.29.0): `docker builder prune` takes `--max-used-space` (modern) with `--keep-storage` as the older variant — the service tries modern first and falls back on unknown-flag errors. `buildctl prune` takes `--keep-storage` (MB integer) on all versions; it never had `--max-used-space`.
 
 ---
 

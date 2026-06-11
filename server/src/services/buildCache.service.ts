@@ -9,9 +9,9 @@ import { promisify } from 'util';
 import { AppSettingsService } from './appSettings.service';
 import {
     BUILDKIT_CONTAINER,
-    builderPruneArgs,
-    buildctlPruneArgsModern,
-    buildctlPruneArgsLegacy,
+    builderPruneArgsModern,
+    builderPruneArgsLegacy,
+    buildctlPruneArgs,
     parseDockerSystemDf,
     parseBuildctlDu,
 } from './buildCache.helpers';
@@ -81,21 +81,21 @@ export class BuildCacheService {
     }
 
     private static async prune(keepGB: number): Promise<void> {
-        await execFileAsync('docker', builderPruneArgs(keepGB), EXEC_OPTS);
-
-        if (!(await BuildCacheService.buildkitUp())) return;
         try {
-            await execFileAsync('docker', buildctlPruneArgsModern(keepGB), EXEC_OPTS);
+            await execFileAsync('docker', builderPruneArgsModern(keepGB), EXEC_OPTS);
         } catch (err: any) {
             const msg = String(err?.stderr || err?.message || '');
-            // Older buildkit doesn't know --max-used-space; retry with the
+            // Older Docker doesn't know --max-used-space; retry with the
             // legacy flag. Any other failure propagates.
             if (keepGB > 0 && /unknown flag|flag provided but not defined/i.test(msg)) {
-                await execFileAsync('docker', buildctlPruneArgsLegacy(keepGB), EXEC_OPTS);
+                await execFileAsync('docker', builderPruneArgsLegacy(keepGB), EXEC_OPTS);
             } else {
                 throw err;
             }
         }
+
+        if (!(await BuildCacheService.buildkitUp())) return;
+        await execFileAsync('docker', buildctlPruneArgs(keepGB), EXEC_OPTS);
     }
 
     private static async buildkitUp(): Promise<boolean> {

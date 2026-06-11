@@ -52,10 +52,10 @@ infrastructure, kept minimal.
 `server/src/services/buildCache.service.ts`, public surface:
 
 - `enforceCap(): Promise<void>` — reads the cap; no-op when `0`. Otherwise:
-  1. `docker builder prune -f --keep-storage=<cap>G` — trims the Docker
+  1. `docker builder prune -f --max-used-space=<cap>G` (with `--keep-storage` fallback for older Docker) — trims the Docker
      daemon's builder cache (compose builds).
   2. If `runnable-buildkit` is Up:
-     `docker exec runnable-buildkit buildctl prune --keep-storage=<bytes>` —
+     `docker exec runnable-buildkit buildctl prune --keep-storage=<MB>` —
      trims the dedicated railpack builder.
 - `usage(): Promise<{ daemonBytes: number; buildkitBytes: number }>` — parses
   `docker system df --format json` (BuildCache total) and

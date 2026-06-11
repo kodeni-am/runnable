@@ -3,9 +3,9 @@ import {
     parseHumanSize,
     parseDockerSystemDf,
     parseBuildctlDu,
-    builderPruneArgs,
-    buildctlPruneArgsModern,
-    buildctlPruneArgsLegacy,
+    builderPruneArgsModern,
+    builderPruneArgsLegacy,
+    buildctlPruneArgs,
 } from '../buildCache.helpers';
 
 describe('parseHumanSize', () => {
@@ -62,37 +62,26 @@ describe('parseBuildctlDu', () => {
 });
 
 describe('prune args builders', () => {
-    it('docker builder prune to a cap', () => {
-        expect(builderPruneArgs(10)).toEqual(['builder', 'prune', '-f', '--keep-storage', '10GB']);
+    it('docker builder prune to a cap (modern flag)', () => {
+        expect(builderPruneArgsModern(10)).toEqual(['builder', 'prune', '-f', '--max-used-space', '10GB']);
     });
-    it('docker builder full prune when cap is 0', () => {
-        expect(builderPruneArgs(0)).toEqual(['builder', 'prune', '-af']);
+    it('docker builder prune to a cap (legacy flag)', () => {
+        expect(builderPruneArgsLegacy(10)).toEqual(['builder', 'prune', '-f', '--keep-storage', '10GB']);
     });
-    it('docker builder full prune when cap is negative', () => {
-        expect(builderPruneArgs(-1)).toEqual(['builder', 'prune', '-af']);
+    it('docker builder full prune when cap is 0 (both variants)', () => {
+        expect(builderPruneArgsModern(0)).toEqual(['builder', 'prune', '-af']);
+        expect(builderPruneArgsLegacy(0)).toEqual(['builder', 'prune', '-af']);
     });
-    it('buildctl modern prune to a cap', () => {
-        expect(buildctlPruneArgsModern(10)).toEqual(
-            ['exec', 'runnable-buildkit', 'buildctl', 'prune', '--max-used-space', '10GB']);
+    it('docker builder full prune when cap is negative (both variants)', () => {
+        expect(builderPruneArgsModern(-1)).toEqual(['builder', 'prune', '-af']);
+        expect(builderPruneArgsLegacy(-1)).toEqual(['builder', 'prune', '-af']);
     });
-    it('buildctl modern full prune when cap is 0', () => {
-        expect(buildctlPruneArgsModern(0)).toEqual(
-            ['exec', 'runnable-buildkit', 'buildctl', 'prune']);
-    });
-    it('buildctl modern full prune when cap is negative', () => {
-        expect(buildctlPruneArgsModern(-1)).toEqual(
-            ['exec', 'runnable-buildkit', 'buildctl', 'prune']);
-    });
-    it('buildctl legacy prune uses MB integer', () => {
-        expect(buildctlPruneArgsLegacy(10)).toEqual(
+    it('buildctl prune uses keep-storage with MB integer', () => {
+        expect(buildctlPruneArgs(10)).toEqual(
             ['exec', 'runnable-buildkit', 'buildctl', 'prune', '--keep-storage', '10000']);
     });
-    it('buildctl legacy full prune when cap is 0', () => {
-        expect(buildctlPruneArgsLegacy(0)).toEqual(
-            ['exec', 'runnable-buildkit', 'buildctl', 'prune']);
-    });
-    it('buildctl legacy full prune when cap is negative', () => {
-        expect(buildctlPruneArgsLegacy(-1)).toEqual(
-            ['exec', 'runnable-buildkit', 'buildctl', 'prune']);
+    it('buildctl full prune when cap is 0 or negative', () => {
+        expect(buildctlPruneArgs(0)).toEqual(['exec', 'runnable-buildkit', 'buildctl', 'prune']);
+        expect(buildctlPruneArgs(-1)).toEqual(['exec', 'runnable-buildkit', 'buildctl', 'prune']);
     });
 });
