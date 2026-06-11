@@ -7,6 +7,8 @@ import { Project, ServiceStatus, ServerType } from '../entities';
 import { SandboxService } from './sandbox.service';
 import { ServerConfigService } from './serverConfig.service';
 import { DetectService } from './detect.service';
+import { ComposePolicyService } from './composePolicy.service';
+import { parse as parseYaml } from 'yaml';
 
 interface ManagedProcess {
     process: ChildProcess;
@@ -129,6 +131,28 @@ export class ProcessService {
                     const composeName = `runnable-${projectId.substring(0, 8)}`;
                     await fs.appendFile(buildLogPath, `\nUsing docker compose (file: ${composeFile}, service: ${composeService}, project: ${composeName})\n`);
 
+                    // Confine the compose file to the project directory — it's
+                    // passed to `docker compose -f` below.
+                    const composeAbsPath = path.resolve(project.directoryPath, composeFile);
+                    const projectBase = path.resolve(project.directoryPath);
+                    if (composeAbsPath !== projectBase && !composeAbsPath.startsWith(projectBase + path.sep)) {
+                        throw new Error('Compose file path is outside the project directory');
+                    }
+
+                    // Pre-scan the raw file for env_file/extends/include paths
+                    // that would make the upcoming `docker compose config` (root)
+                    // read host files. Must happen before config runs.
+                    try {
+                        const rawCompose = await fs.readFile(composeAbsPath, 'utf-8');
+                        ComposePolicyService.validateRawReferences(rawCompose, project.directoryPath);
+                    } catch (err: any) {
+                        if (err instanceof Error && err.name === 'ComposePolicyError') {
+                            await fs.appendFile(buildLogPath, `\n❌ Compose rejected by security policy: ${err.message}\n`);
+                            throw new Error(`Compose file rejected: ${err.message}`);
+                        }
+                        throw new Error(`Compose file not found: ${composeFile}`);
+                    }
+
                     // Write project env vars to a .runnable.env file so they are available
                     // for variable interpolation in the compose YAML and for `environment:`
                     // keys without explicit values.
@@ -142,6 +166,30 @@ export class ProcessService {
 
                     // Base compose args — reused across all commands
                     const composeBase = ['compose', '-p', composeName, '--env-file', envFilePath, '-f', composeFile];
+
+                    // Screen the stack for host-escape directives BEFORE running
+                    // it. Validate the output of `docker compose config` rather
+                    // than the raw file: config applies ${VAR} interpolation
+                    // (from the user-controlled env file), resolves YAML merge
+                    // keys/anchors and `extends`, and normalizes volumes to long
+                    // form — so the validated structure matches exactly what
+                    // `up` will run. Enforced here (not at config-save) because
+                    // the file is user-editable in the file browser until deploy.
+                    const configResult = await SandboxService.exec(
+                        projectId, 'docker',
+                        [...composeBase, 'config'],
+                        project.directoryPath,
+                    );
+                    if (configResult.exitCode !== 0) {
+                        await fs.appendFile(buildLogPath, `\n❌ Invalid compose file:\n${configResult.stderr}\n`);
+                        throw new Error(`Invalid compose file: ${configResult.stderr.trim() || 'docker compose config failed'}`);
+                    }
+                    try {
+                        ComposePolicyService.validate(parseYaml(configResult.stdout));
+                    } catch (err: any) {
+                        await fs.appendFile(buildLogPath, `\n❌ Compose rejected by security policy: ${err.message}\n`);
+                        throw new Error(`Compose file rejected: ${err.message}`);
+                    }
 
                     // Bring down any previous compose stack for this project
                     await SandboxService.exec(

@@ -14,6 +14,7 @@ import { config, envPath } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { ProcessService } from './services/process.service';
 import { HealthMonitorService } from './services/healthMonitor.service';
+import { SandboxService } from './services/sandbox.service';
 import { User } from './entities/User';
 import { Project } from './entities/Project';
 import { ProjectCollaborator } from './entities/ProjectCollaborator';
@@ -229,6 +230,9 @@ async function bootstrap() {
         console.log(`🚀 Runnable API server running on ${host}:${config.port}`);
         console.log(`📡 Environment: ${config.nodeEnv}`);
     });
+
+    // Remediate any pre-existing sandbox users still in the docker group
+    SandboxService.reconcileDockerGroup().catch(() => { });
 
     // Watch running app containers; notifies + optionally restarts on crash
     HealthMonitorService.start();

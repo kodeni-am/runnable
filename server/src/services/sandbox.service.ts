@@ -16,6 +16,14 @@ interface ExecResult {
 
 const ALLOWED_COMMANDS = ['git', 'caddy', 'nginx', 'apache2', 'apachectl', 'systemctl', 'ls', 'mkdir', 'rm', 'cp', 'railpack', 'docker', 'sh', 'npm', 'npx'];
 
+// Orchestration tools that talk to the Docker daemon. These run with the
+// server's own (root) identity, never as the per-project sandbox user — giving
+// the sandbox user docker access is root-equivalent and would let a project's
+// build scripts or runtime escape the sandbox. The user's own code only runs
+// inside the resulting container (or buildkit during build), never with this
+// daemon access.
+const ROOT_COMMANDS = ['docker', 'railpack'];
+
 export class SandboxService {
     static async exec(projectId: string, command: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): Promise<ExecResult> {
         // Validate command against allowlist
@@ -28,7 +36,9 @@ export class SandboxService {
             const processEnv = { ...process.env, ...env };
             let child: ChildProcess;
 
-            if (config.sandbox.enabled) {
+            // Docker/railpack run as the server (root); everything else drops
+            // to the unprivileged per-project sandbox user.
+            if (config.sandbox.enabled && !ROOT_COMMANDS.includes(baseCommand)) {
                 const sandboxUser = `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`;
                 const envArgs = Object.entries(env || {}).map(([k, v]) => `${k}=${v}`);
                 child = spawn('sudo', ['-n', '-u', sandboxUser,
@@ -78,7 +88,9 @@ export class SandboxService {
         return new Promise((resolve, reject) => {
             const processEnv = { ...process.env, ...env };
             const envArgs = Object.entries(env || {}).map(([k, v]) => `${k}=${v}`);
-            const child = config.sandbox.enabled
+            // Docker/railpack run as the server (root); everything else drops
+            // to the unprivileged per-project sandbox user.
+            const child = (config.sandbox.enabled && !ROOT_COMMANDS.includes(baseCommand))
                 ? spawn('sudo', ['-n', '-u', `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`,
                     'env', `PATH=${processEnv.PATH || '/usr/local/bin:/usr/bin:/bin'}`, ...envArgs,
                     command, ...args], { cwd, env: processEnv })
@@ -108,9 +120,12 @@ export class SandboxService {
         const sandboxUser = `${config.sandbox.userPrefix}${projectId.substring(0, 8)}`;
 
         try {
-            // Create dedicated user (using execFile — no shell, no injection)
-            // -G docker so the sandbox user can reach /var/run/docker.sock (mode 0660 root:docker on modern Docker)
-            await execFileAsync('sudo', ['-n', 'useradd', '-r', '-M', '-d', directoryPath, '-s', '/usr/sbin/nologin', '-G', 'docker', sandboxUser]);
+            // Create dedicated user (using execFile — no shell, no injection).
+            // Deliberately NOT in the docker group: docker-socket access is
+            // root-equivalent. The server (root) issues all docker/railpack
+            // commands on the project's behalf; the sandbox user never touches
+            // the daemon directly.
+            await execFileAsync('sudo', ['-n', 'useradd', '-r', '-M', '-d', directoryPath, '-s', '/usr/sbin/nologin', sandboxUser]);
 
             // Create directory with proper ownership
             await fs.mkdir(directoryPath, { recursive: true });
@@ -130,6 +145,33 @@ export class SandboxService {
             console.error(`Failed to create sandbox for ${projectId}:`, error.message);
             // Fallback: just create the directory
             await fs.mkdir(directoryPath, { recursive: true });
+        }
+    }
+
+    /**
+     * One-time remediation: strip the `docker` group from any existing sandbox
+     * users left over from before docker access was moved to the server. New
+     * users are no longer added to the group; this catches already-provisioned
+     * installs on restart. Best-effort — never throws.
+     */
+    static async reconcileDockerGroup(): Promise<void> {
+        if (!config.sandbox.enabled) return;
+        try {
+            const { stdout } = await execFileAsync('getent', ['group', 'docker']);
+            // Format: docker:x:999:member1,member2,...
+            const members = (stdout.split(':')[3] || '').trim();
+            if (!members) return;
+            const sandboxMembers = members.split(',')
+                .map(m => m.trim())
+                .filter(m => m.startsWith(config.sandbox.userPrefix));
+            for (const user of sandboxMembers) {
+                await execFileAsync('sudo', ['-n', 'gpasswd', '-d', user, 'docker']).catch(() => { });
+            }
+            if (sandboxMembers.length > 0) {
+                console.log(`🔒 Removed ${sandboxMembers.length} sandbox user(s) from the docker group`);
+            }
+        } catch {
+            // getent/gpasswd unavailable or no docker group — nothing to do
         }
     }
 
