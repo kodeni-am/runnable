@@ -60,5 +60,5 @@ export function buildctlPruneArgsModern(keepGB: number): string[] {
 export function buildctlPruneArgsLegacy(keepGB: number): string[] {
     const base = ['exec', BUILDKIT_CONTAINER, 'buildctl', 'prune'];
     if (keepGB <= 0) return base;
-    return [...base, '--keep-storage', String(keepGB * 1000)];
+    return [...base, '--keep-storage', String(Math.round(keepGB * 1000))];
 }
