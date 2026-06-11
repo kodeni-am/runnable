@@ -132,6 +132,8 @@ export const projectsApi = {
     reloadProxy: (id: string) => api.post(`/projects/${id}/reload-proxy`),
     status: (id: string) => api.get(`/projects/${id}/status`),
     logs: (id: string, lines?: number) => api.get(`/projects/${id}/logs`, { params: { lines } }),
+    buildLog: (id: string, lines?: number) =>
+        api.get<{ logs: string[] }>(`/projects/${id}/build-log`, { params: { lines } }),
     listContainers: (id: string) =>
         api.get<{ containers: ContainerInfo[] }>(`/projects/${id}/containers`),
     containerLogs: (id: string, container: string, lines?: number) =>

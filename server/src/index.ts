@@ -18,7 +18,7 @@ import { SandboxService } from './services/sandbox.service';
 import { User } from './entities/User';
 import { Project } from './entities/Project';
 import { ProjectCollaborator } from './entities/ProjectCollaborator';
-import { Role, ServiceStatus } from './entities/enums';
+import { Role, ServiceStatus, ServerType } from './entities/enums';
 import type { JwtPayload } from './middleware/auth';
 import bcrypt from 'bcryptjs';
 
@@ -95,18 +95,30 @@ async function bootstrap() {
         process.exit(1);
     }
 
-    // Reconcile state from a previous crash: a project stuck in BUILDING or
-    // DEPLOYING has no build actually running anymore. RUNNING projects are
-    // left alone — their containers survive restarts (--restart unless-stopped)
-    // and the health monitor flags any that died.
+    // Reconcile state from a previous crash. BUILDING/DEPLOYING means no
+    // build is actually running anymore — but under zero-downtime deploys
+    // the old (or even the freshly switched-to) workload may be alive and
+    // serving, so check liveness before declaring ERROR: the health monitor
+    // doesn't sweep ERROR projects, so a wrong ERROR here would stick
+    // forever on a healthy site. RUNNING projects are left alone as before —
+    // their containers survive restarts (--restart unless-stopped) and the
+    // health monitor flags any that died.
     try {
         const projectRepo = AppDataSource.getRepository(Project);
-        const stuck = await projectRepo.update(
-            { status: In([ServiceStatus.BUILDING, ServiceStatus.DEPLOYING]) },
-            { status: ServiceStatus.ERROR },
-        );
-        if (stuck.affected) {
-            console.warn(`⚠️  Reset ${stuck.affected} project(s) stuck in BUILDING/DEPLOYING from a previous run`);
+        const stuck = await projectRepo.find({
+            where: { status: In([ServiceStatus.BUILDING, ServiceStatus.DEPLOYING]) },
+        });
+        for (const p of stuck) {
+            let alive = false;
+            if (p.serverType === ServerType.APP && p.containerId) {
+                alive = await HealthMonitorService.isContainerRunning(p).catch(() => false);
+            }
+            await projectRepo.update(p.id, {
+                status: alive ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
+            });
+        }
+        if (stuck.length) {
+            console.warn(`⚠️  Reconciled ${stuck.length} project(s) stuck in BUILDING/DEPLOYING from a previous run`);
         }
     } catch (error) {
         console.error('Failed to reconcile project statuses:', error);

@@ -8,6 +8,7 @@ import { ProjectPermission } from '../entities/enums';
 import { DEFAULT_PROJECT_PERMISSIONS, sanitizeProjectPermissions } from '../entities/ProjectCollaborator';
 import { DEFAULT_USER_PERMISSIONS } from '../entities/User';
 import { authenticate, requireApproval, requireProjectAccess, AuthRequest } from '../middleware/auth';
+import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
 import { SandboxService } from '../services/sandbox.service';
 import { ProcessService } from '../services/process.service';
@@ -428,6 +429,25 @@ router.get('/:id/logs', requireProjectAccess(ProjectPermission.CAN_VIEW_LOGS), a
         const lines = parseInt(req.query.lines as string) || 100;
         const logs = await ProcessService.getLogs(req.params.id as string, lines);
         res.json({ logs });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Build/deploy log (written by ProcessService during builds and deploys).
+// This is where zero-downtime strategy lines and degraded-pass warnings land.
+router.get('/:id/build-log', requireProjectAccess(ProjectPermission.CAN_VIEW_LOGS), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const lines = Math.min(parseInt(req.query.lines as string) || 300, 2000);
+        const storageDir = path.resolve(config.hosting.servDir, '..');
+        const buildLogPath = path.join(storageDir, 'logs', `${project.subdomain}-build.log`);
+        try {
+            const content = await fs.readFile(buildLogPath, 'utf-8');
+            res.json({ logs: content.split('\n').slice(-lines) });
+        } catch {
+            res.json({ logs: ['No build log yet — it appears after the first build or deploy.'] });
+        }
     } catch (error) {
         next(error);
     }
