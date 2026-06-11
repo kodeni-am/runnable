@@ -50,6 +50,7 @@ router.post('/github', webhookLimiter, async (req: Request, res: Response, next:
             .addSelect('repo.webhookSecret')
             .leftJoinAndSelect('repo.project', 'project')
             .where('repo.repoUrl = :repoUrl', { repoUrl })
+            .andWhere('project.isPreview = :isPreview', { isPreview: false })
             .getOne();
 
         if (!githubRepo || !githubRepo.webhookSecret) {
