@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { adminApi } from '../api/admin';
 import type { UserDTO, UserPermissions } from '../api/admin';
-import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings } from 'lucide-react';
+import { systemApi } from '../api/system';
+import type { BuildCacheInfo } from '../api/system';
+import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings, HardDrive } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
 
@@ -26,8 +28,30 @@ export default function Admin() {
     const [permSaving, setPermSaving] = useState(false);
     const [allowedTypesStr, setAllowedTypesStr] = useState('');
 
+    // Build-cache (System) section
+    const [cache, setCache] = useState<BuildCacheInfo | null>(null);
+    const [cacheError, setCacheError] = useState('');
+    const [capInput, setCapInput] = useState('');
+    const [capSaving, setCapSaving] = useState(false);
+    const [pruning, setPruning] = useState(false);
+    const [cacheMessage, setCacheMessage] = useState('');
+
+    const gb = (bytes: number) => (bytes / 1e9).toFixed(2);
+
+    const fetchBuildCache = async () => {
+        try {
+            setCacheError('');
+            const { data } = await systemApi.getBuildCache();
+            setCache(data);
+            setCapInput(String(data.keepGB));
+        } catch (err: any) {
+            setCacheError(err.response?.data?.error || 'Failed to load build-cache info');
+        }
+    };
+
     useEffect(() => {
         fetchUsers();
+        fetchBuildCache();
     }, []);
 
     const fetchUsers = async () => {
@@ -39,6 +63,41 @@ export default function Admin() {
             setError(err.response?.data?.error || 'Failed to load users');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleSaveCap = async () => {
+        const keepGB = Number(capInput);
+        if (!Number.isInteger(keepGB) || keepGB < 0 || keepGB > 500) {
+            setCacheError('Cap must be a whole number between 0 and 500');
+            return;
+        }
+        try {
+            setCapSaving(true);
+            setCacheError('');
+            setCacheMessage('');
+            await systemApi.updateBuildCache(keepGB);
+            setCacheMessage(keepGB === 0 ? 'Automatic pruning disabled' : `Cap saved: ${keepGB} GB`);
+            await fetchBuildCache();
+        } catch (err: any) {
+            setCacheError(err.response?.data?.error || 'Failed to save cap');
+        } finally {
+            setCapSaving(false);
+        }
+    };
+
+    const handlePrune = async () => {
+        try {
+            setPruning(true);
+            setCacheError('');
+            setCacheMessage('');
+            const { data } = await systemApi.pruneBuildCache();
+            setCacheMessage(`Freed ${gb(data.freedBytes)} GB`);
+            await fetchBuildCache();
+        } catch (err: any) {
+            setCacheError(err.response?.data?.error || 'Prune failed');
+        } finally {
+            setPruning(false);
         }
     };
 
@@ -199,6 +258,42 @@ export default function Admin() {
                             </table>
                         </div>
                     )}
+                </div>
+
+                <div className="glass" style={{ padding: 24, borderRadius: 12, marginTop: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                        <HardDrive size={20} className="text-primary" />
+                        <h2 style={{ margin: 0 }}>System — Build Cache</h2>
+                    </div>
+
+                    {cacheError && <div className="error-message">{cacheError}</div>}
+                    {cacheMessage && <div className="alert alert-success">{cacheMessage}</div>}
+
+                    {cache && (
+                        <p style={{ marginBottom: 16 }}>
+                            Current usage: <strong>{gb(cache.usageBytes)} GB</strong>
+                            {' '}(daemon {gb(cache.daemonBytes)} GB, buildkit {gb(cache.buildkitBytes)} GB)
+                        </p>
+                    )}
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        <label htmlFor="cache-cap">Cap (GB, 0 = disabled):</label>
+                        <input
+                            id="cache-cap"
+                            type="number"
+                            min={0}
+                            max={500}
+                            value={capInput}
+                            onChange={(e) => setCapInput(e.target.value)}
+                            style={{ width: 100 }}
+                        />
+                        <button className="btn btn-primary" onClick={handleSaveCap} disabled={capSaving}>
+                            {capSaving ? 'Saving…' : 'Save'}
+                        </button>
+                        <button className="btn btn-secondary" onClick={handlePrune} disabled={pruning}>
+                            {pruning ? 'Pruning…' : 'Prune now'}
+                        </button>
+                    </div>
                 </div>
             </div>
 

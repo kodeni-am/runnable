@@ -1,5 +1,12 @@
 import api from './client';
 
+export interface BuildCacheInfo {
+    usageBytes: number;
+    daemonBytes: number;
+    buildkitBytes: number;
+    keepGB: number;
+}
+
 export interface SystemStats {
     hostname: string;
     platform: string;
@@ -33,4 +40,7 @@ export interface SystemStats {
 
 export const systemApi = {
     stats: () => api.get<SystemStats>('/system/stats'),
+    getBuildCache: () => api.get<BuildCacheInfo>('/system/build-cache'),
+    updateBuildCache: (keepGB: number) => api.put<{ keepGB: number }>('/system/build-cache', { keepGB }),
+    pruneBuildCache: () => api.post<{ freedBytes: number }>('/system/build-cache/prune'),
 };
