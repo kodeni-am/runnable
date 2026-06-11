@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { AppDataSource } from '../config/data-source';
 import { GithubRepo } from '../entities';
 import { GithubService } from '../services/github.service';
+import { PreviewService } from '../services/preview.service';
 
 const router = Router();
 
@@ -16,7 +17,6 @@ const webhookLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-// GitHub webhook receiver (no auth - verified by HMAC signature)
 router.post('/github', webhookLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const signature = req.headers['x-hub-signature-256'] as string;
@@ -26,7 +26,7 @@ router.post('/github', webhookLimiter, async (req: Request, res: Response, next:
         }
 
         const event = req.headers['x-github-event'] as string;
-        if (event !== 'push') {
+        if (event !== 'push' && event !== 'pull_request') {
             res.json({ message: 'Event ignored' });
             return;
         }
@@ -36,14 +36,13 @@ router.post('/github', webhookLimiter, async (req: Request, res: Response, next:
         const payload = rawBody ? rawBody.toString() : JSON.stringify(req.body);
 
         const repoUrl = req.body.repository?.html_url;
-
         if (!repoUrl) {
             res.status(400).json({ error: 'Invalid payload' });
             return;
         }
 
-        // Find the project by repo URL. webhookSecret is select: false, so it
-        // must be selected explicitly here — this route is its only consumer.
+        // Resolve the PARENT (non-preview) repo. Preview rows share the repoUrl
+        // but carry no webhookSecret. webhookSecret is select:false.
         const githubRepoRepo = AppDataSource.getRepository(GithubRepo);
         const githubRepo = await githubRepoRepo
             .createQueryBuilder('repo')
@@ -58,27 +57,39 @@ router.post('/github', webhookLimiter, async (req: Request, res: Response, next:
             return;
         }
 
-        // Verify signature
         const isValid = GithubService.verifyWebhookSignature(payload, signature, githubRepo.webhookSecret);
         if (!isValid) {
             res.status(401).json({ error: 'Invalid signature' });
             return;
         }
 
-        // Check if push is to the correct branch
+        if (event === 'pull_request') {
+            const action = req.body.action as string;
+            const prBody = req.body.pull_request;
+            if (!prBody) {
+                res.json({ message: 'No pull_request in payload' });
+                return;
+            }
+            const pr = {
+                number: req.body.number ?? prBody.number,
+                head: { ref: prBody.head?.ref, repo: prBody.head?.repo ? { full_name: prBody.head.repo.full_name } : null },
+                base: { repo: { full_name: prBody.base?.repo?.full_name } },
+            };
+            const result = await PreviewService.handlePullRequest(githubRepo.project, action, pr);
+            res.json({ message: `Preview: ${result}` });
+            return;
+        }
+
+        // event === 'push'
         const branch = req.body.ref?.replace('refs/heads/', '');
         if (branch !== githubRepo.branch) {
             res.json({ message: `Push to ${branch} ignored, watching ${githubRepo.branch}` });
             return;
         }
-
-        // Branch deletions carry an all-zeros `after` SHA and nothing to deploy
         if (req.body.deleted === true) {
             res.json({ message: 'Branch deletion ignored' });
             return;
         }
-
-        // Trigger deploy, recording the pushed commit for the deployment history
         await GithubService.handlePushEvent(githubRepo.project.id, {
             sha: req.body.after,
             message: req.body.head_commit?.message,
