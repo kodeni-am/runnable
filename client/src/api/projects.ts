@@ -50,6 +50,15 @@ export interface Project {
     composeService?: string;
     notificationWebhookUrl?: string | null;
     autoRestart?: boolean;
+    previewsEnabled?: boolean;
+    previewBaseDomain?: string | null;
+    previewEnvOverrides?: Record<string, string> | null;
+    previewTtlDays?: number;
+    isPreview?: boolean;
+    parentProjectId?: string;
+    prNumber?: number;
+    prBranch?: string;
+    baseDomain?: string | null;
     userId: string;
     githubRepo?: {
         id: string;
@@ -133,6 +142,9 @@ export const projectsApi = {
     listDeployments: (id: string) => api.get<Deployment[]>(`/projects/${id}/deployments`),
     rollbackDeployment: (id: string, deploymentId: string) =>
         api.post<Deployment>(`/projects/${id}/deployments/${deploymentId}/rollback`),
+    listPreviews: (id: string) => api.get<Project[]>(`/projects/${id}/previews`),
+    destroyPreview: (id: string, previewId: string) =>
+        api.post(`/projects/${id}/previews/${previewId}/destroy`),
 
     // Custom domains
     listDomains: (id: string) => api.get(`/projects/${id}/domains`),
