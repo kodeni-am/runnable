@@ -79,6 +79,11 @@ export default function ProjectDetail() {
     // Notifications & health
     const [notificationWebhookUrl, setNotificationWebhookUrl] = useState('');
     const [autoRestart, setAutoRestart] = useState(false);
+    // PR Previews
+    const [previewsEnabled, setPreviewsEnabled] = useState(false);
+    const [previewBaseDomain, setPreviewBaseDomain] = useState('');
+    const [previewTtlDays, setPreviewTtlDays] = useState('7');
+    const [previewEnvOverridesText, setPreviewEnvOverridesText] = useState('');
 
     // Collaborator state
     const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -123,6 +128,10 @@ export default function ProjectDetail() {
                     setInternalPort(p.internalPort != null ? String(p.internalPort) : '');
                     setNotificationWebhookUrl(p.notificationWebhookUrl || '');
                     setAutoRestart(p.autoRestart || false);
+                    setPreviewsEnabled(p.previewsEnabled || false);
+                    setPreviewBaseDomain(p.previewBaseDomain || '');
+                    setPreviewTtlDays(p.previewTtlDays != null ? String(p.previewTtlDays) : '7');
+                    setPreviewEnvOverridesText(Object.entries(p.previewEnvOverrides || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
                 }
             });
         }
@@ -298,6 +307,13 @@ export default function ProjectDetail() {
                 internalPort: parsedPort ?? null,
                 notificationWebhookUrl: notificationWebhookUrl.trim() || null,
                 autoRestart,
+                previewsEnabled,
+                previewBaseDomain: previewBaseDomain.trim() || null,
+                previewTtlDays: Number(previewTtlDays) || 7,
+                previewEnvOverrides: previewEnvOverridesText
+                    .split('\n').map(l => l.trim())
+                    .filter(l => l && !l.startsWith('#') && l.includes('='))
+                    .reduce((acc, line) => { const eq = line.indexOf('='); acc[line.slice(0, eq).trim()] = line.slice(eq + 1).trim(); return acc; }, {} as Record<string, string>),
             });
             const refreshed = await fetchProject(id);
             if (refreshed) {
@@ -932,6 +948,65 @@ export default function ProjectDetail() {
                                     </div>
                                 )}
                             </div>
+
+                            {/* ── PR PREVIEWS (GitHub-connected app projects only) ─── */}
+                            {p.githubRepo && p.serverType === 'app' && (
+                                <div style={{ marginTop: 24, marginBottom: 24, padding: '16px 20px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
+                                    <label style={{ fontWeight: 600, fontSize: 14, display: 'block', marginBottom: 16 }}>PR Previews</label>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={previewsEnabled}
+                                            onChange={(e) => setPreviewsEnabled(e.target.checked)}
+                                            disabled={!canEditConfig}
+                                            style={{ width: 16, height: 16, cursor: canEditConfig ? 'pointer' : 'default' }}
+                                        />
+                                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                            Spin up an ephemeral environment for each pull request
+                                        </span>
+                                    </div>
+                                    <div className="form-group" style={{ marginBottom: 12 }}>
+                                        <label style={{ fontSize: 13 }}>Preview base domain</label>
+                                        <input
+                                            className="form-input"
+                                            placeholder="preview.example.com"
+                                            value={previewBaseDomain}
+                                            onChange={(e) => setPreviewBaseDomain(e.target.value)}
+                                            disabled={!canEditConfig}
+                                        />
+                                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                            A wildcard DNS record <code>*.{previewBaseDomain || 'preview.example.com'}</code> must point at this server.
+                                        </p>
+                                    </div>
+                                    <div className="form-group" style={{ marginBottom: 12 }}>
+                                        <label style={{ fontSize: 13 }}>Preview TTL (days)</label>
+                                        <input
+                                            className="form-input"
+                                            type="number"
+                                            min={1}
+                                            max={365}
+                                            placeholder="7"
+                                            value={previewTtlDays}
+                                            onChange={(e) => setPreviewTtlDays(e.target.value)}
+                                            disabled={!canEditConfig}
+                                        />
+                                    </div>
+                                    <div className="form-group" style={{ marginBottom: 0 }}>
+                                        <label style={{ fontSize: 13 }}>Preview env overrides</label>
+                                        <textarea
+                                            className="form-input"
+                                            style={{ width: '100%', minHeight: 120, fontFamily: 'monospace', fontSize: 13, resize: 'vertical' }}
+                                            placeholder={'KEY=value'}
+                                            value={previewEnvOverridesText}
+                                            onChange={(e) => setPreviewEnvOverridesText(e.target.value)}
+                                            disabled={!canEditConfig}
+                                        />
+                                        <p style={{ fontSize: 12, color: 'var(--status-error)', marginTop: 4 }}>
+                                            Production env vars are inherited by previews unless overridden here. Scrub or replace any secrets you don't want in ephemeral PR environments.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="form-group">
                                 <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
