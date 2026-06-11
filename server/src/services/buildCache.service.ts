@@ -52,7 +52,7 @@ export class BuildCacheService {
         const run = (async () => {
             try {
                 const { buildCacheKeepGB } = await AppSettingsService.get();
-                if (!buildCacheKeepGB || buildCacheKeepGB <= 0) return; // disabled
+                if (buildCacheKeepGB <= 0) return; // 0 means disabled
                 await BuildCacheService.prune(buildCacheKeepGB);
             } catch (err: any) {
                 console.error('[BuildCache] enforcement failed:', err?.message || err);
@@ -64,7 +64,12 @@ export class BuildCacheService {
         return run;
     }
 
-    /** Explicit "Prune now". Cap 0 means full prune. Throws on failure. */
+    /**
+     * Explicit "Prune now". Cap 0 means full prune. Throws on failure.
+     * Intentionally bypasses the inFlight guard — docker/buildkit serialize
+     * concurrent prunes internally, and sharing the guard would swallow the
+     * errors this method must surface to the API.
+     */
     static async pruneToCap(): Promise<{ freedBytes: number }> {
         const before = await BuildCacheService.usage();
         const { buildCacheKeepGB } = await AppSettingsService.get();
@@ -96,7 +101,9 @@ export class BuildCacheService {
     private static async buildkitUp(): Promise<boolean> {
         try {
             const { stdout } = await execFileAsync('docker',
-                ['ps', '--filter', `name=${BUILDKIT_CONTAINER}`, '--format', '{{.Status}}'], EXEC_OPTS);
+                // ^...$ anchors: docker's name filter is a regex substring
+                // match, and e.g. "runnable-buildkit-dev" must not count.
+                ['ps', '--filter', `name=^${BUILDKIT_CONTAINER}$`, '--format', '{{.Status}}'], EXEC_OPTS);
             return stdout.includes('Up');
         } catch {
             return false;
