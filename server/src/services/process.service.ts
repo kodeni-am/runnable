@@ -76,21 +76,11 @@ export class ProcessService {
                 await projectRepo.save(project);
                 ProcessService.emitStatus(projectId, ServiceStatus.BUILDING);
 
-                const imageName = `runnable-img-${projectId.substring(0, 8)}`;
                 const containerName = `runnable-${projectId.substring(0, 8)}`;
-                const storageDir = path.resolve(config.hosting.servDir, '..');
-                const buildLogPath = path.join(storageDir, 'logs', `${project.subdomain}-build.log`);
+                const buildLogPath = ProcessService.buildLogPathFor(project);
 
                 // Ensure logs directory exists
                 await fs.mkdir(path.dirname(buildLogPath), { recursive: true });
-
-                const logAndCheck = async (result: any, step: string) => {
-                    const logContent = `\n--- ${step} ---\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}\nEXIT CODE: ${result.exitCode}\n\n`;
-                    await fs.appendFile(buildLogPath, logContent);
-                    if (result.exitCode !== 0) {
-                        throw new Error(`${step} failed with exit code ${result.exitCode}. See logs for details.`);
-                    }
-                };
 
                 // Clear previous build logs
                 await fs.writeFile(buildLogPath, `Building project ${project.name} (${projectId})...\n`);
@@ -107,7 +97,6 @@ export class ProcessService {
 
                 // Use user-provided commands, falling back to auto-detected defaults
                 const effectiveBuildCommand = project.buildCommand || detection.buildCommand;
-                const effectiveStartCommand = project.startCommand || detection.startCommand;
 
                 // Parse project env vars — needed by both compose and Railpack paths
                 const userEnv = typeof project.envVars === 'string'
@@ -117,253 +106,32 @@ export class ProcessService {
                 // Determine whether to use docker compose or the Railpack single-container path
                 const useCompose = project.useCompose || detection.useCompose;
                 const composeFile = project.composeFile || detection.composeFile || 'docker-compose.yml';
-                const composeService = project.composeService;
 
                 if (useCompose) {
                     // ── DOCKER COMPOSE DEPLOYMENT PATH ──────────────────────────────────
-                    if (!composeService) {
-                        throw new Error(
-                            'Compose deployment requires a "Primary Service" name. ' +
-                            'Go to the project Settings tab and set the "Primary Service" field ' +
-                            'to the name of the compose service that exposes the HTTP port.'
-                        );
-                    }
-
                     const composeName = `runnable-${projectId.substring(0, 8)}`;
-                    await fs.appendFile(buildLogPath, `\nUsing docker compose (file: ${composeFile}, service: ${composeService}, project: ${composeName})\n`);
-
-                    // Confine the compose file to the project directory — it's
-                    // passed to `docker compose -f` below.
-                    const composeAbsPath = path.resolve(project.directoryPath, composeFile);
-                    const projectBase = path.resolve(project.directoryPath);
-                    if (composeAbsPath !== projectBase && !composeAbsPath.startsWith(projectBase + path.sep)) {
-                        throw new Error('Compose file path is outside the project directory');
-                    }
-
-                    // Pre-scan the raw file for env_file/extends/include paths
-                    // that would make the upcoming `docker compose config` (root)
-                    // read host files. Must happen before config runs.
-                    try {
-                        const rawCompose = await fs.readFile(composeAbsPath, 'utf-8');
-                        ComposePolicyService.validateRawReferences(rawCompose, project.directoryPath);
-                    } catch (err: any) {
-                        if (err instanceof Error && err.name === 'ComposePolicyError') {
-                            await fs.appendFile(buildLogPath, `\n❌ Compose rejected by security policy: ${err.message}\n`);
-                            throw new Error(`Compose file rejected: ${err.message}`);
-                        }
-                        throw new Error(`Compose file not found: ${composeFile}`);
-                    }
-
-                    // Write project env vars to a .runnable.env file so they are available
-                    // for variable interpolation in the compose YAML and for `environment:`
-                    // keys without explicit values.
-                    const envFilePath = path.join(project.directoryPath, '.runnable.env');
-                    const envFileContent = Object.entries(userEnv)
-                        .map(([k, v]) => `${k}=${String(v).replace(/\n/g, '\\n')}`)
-                        .join('\n');
-                    await fs.writeFile(envFilePath, envFileContent + '\n');
-                    await fs.appendFile(buildLogPath,
-                        `Wrote ${Object.keys(userEnv).length} env var(s) to .runnable.env\n`);
-
-                    // Base compose args — reused across all commands
-                    const composeBase = ['compose', '-p', composeName, '--env-file', envFilePath, '-f', composeFile];
-
-                    // Screen the stack for host-escape directives BEFORE running
-                    // it. Validate the output of `docker compose config` rather
-                    // than the raw file: config applies ${VAR} interpolation
-                    // (from the user-controlled env file), resolves YAML merge
-                    // keys/anchors and `extends`, and normalizes volumes to long
-                    // form — so the validated structure matches exactly what
-                    // `up` will run. Enforced here (not at config-save) because
-                    // the file is user-editable in the file browser until deploy.
-                    const configResult = await SandboxService.exec(
-                        projectId, 'docker',
-                        [...composeBase, 'config'],
-                        project.directoryPath,
-                    );
-                    if (configResult.exitCode !== 0) {
-                        await fs.appendFile(buildLogPath, `\n❌ Invalid compose file:\n${configResult.stderr}\n`);
-                        throw new Error(`Invalid compose file: ${configResult.stderr.trim() || 'docker compose config failed'}`);
-                    }
-                    try {
-                        ComposePolicyService.validate(parseYaml(configResult.stdout));
-                    } catch (err: any) {
-                        await fs.appendFile(buildLogPath, `\n❌ Compose rejected by security policy: ${err.message}\n`);
-                        throw new Error(`Compose file rejected: ${err.message}`);
-                    }
+                    await ProcessService.validateComposeAndWriteEnv(project, userEnv, buildLogPath, composeName, composeFile);
 
                     // Bring down any previous compose stack for this project
                     await SandboxService.exec(
                         projectId, 'docker',
-                        [...composeBase, 'down', '--remove-orphans'],
+                        [...ProcessService.composeBaseArgs(project, composeName, composeFile), 'down', '--remove-orphans'],
                         project.directoryPath,
                     );
 
-                    // Compose up with build
-                    await fs.appendFile(buildLogPath, '\n--- Docker Compose Up (streaming) ---\n');
-                    const composeExitCode = await SandboxService.spawn(
-                        projectId, 'docker',
-                        [...composeBase, 'up', '--build', '-d'],
-                        buildLogPath,
-                        project.directoryPath,
-                    );
-
-                    if (composeExitCode !== 0) {
-                        throw new Error(`docker compose up failed with exit code ${composeExitCode}. See build logs for details.`);
-                    }
-
-                    // Discover the host port published by the primary service
-                    const internalPort = project.internalPort || 8080;
-                    let actualHostPort: number | null = null;
-
-                    for (let attempt = 0; attempt < 15; attempt++) {
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-
-                        const portResult = await SandboxService.exec(
-                            projectId, 'docker',
-                            [...composeBase, 'port', composeService, String(internalPort)],
-                            project.directoryPath,
-                        );
-                        await fs.appendFile(buildLogPath,
-                            `[Port wait] attempt ${attempt + 1}: ${portResult.stdout.trim() || portResult.stderr.trim()}\n`);
-
-                        const match = portResult.stdout.match(/:(\d+)/);
-                        if (match) {
-                            actualHostPort = parseInt(match[1], 10);
-                            break;
-                        }
-                    }
-
-                    if (!actualHostPort) {
-                        const psResult = await SandboxService.exec(
-                            projectId, 'docker',
-                            [...composeBase, 'ps'],
-                            project.directoryPath,
-                        );
-                        await fs.appendFile(buildLogPath, `--- Compose PS ---\n${psResult.stdout}\n`);
-                        throw new Error(
-                            `Could not determine host port for compose service "${composeService}" ` +
-                            `(internal: ${internalPort}) after 15s. ` +
-                            `Make sure the service exposes port ${internalPort} in the compose file.`
-                        );
-                    }
-
-                    actualPort = actualHostPort;
+                    actualPort = await ProcessService.composeUpAndWaitForPort(project, composeName, buildLogPath, composeFile);
                     // Store the compose project name in containerId so stop/logs can reference it
-                    // Also persist the env file path so stop() can clean it up
                     project.containerId = composeName;
                     project.port = actualPort;
 
                 } else {
                     // ── RAILPACK / DOCKERFILE DEPLOYMENT PATH ───────────────────────────
+                    await ProcessService.buildAppImage(project, effectiveBuildCommand, userEnv, buildLogPath);
 
-                    // Ensure BuildKit is running (required for railpack)
-                    const buildkitCheck = await SandboxService.exec(projectId, 'docker', ['ps', '-a', '--filter', 'name=runnable-buildkit', '--format', '{{.Status}}']);
-                    if (!buildkitCheck.stdout.includes('Up')) {
-                        await fs.appendFile(buildLogPath, "Starting BuildKit daemon...\n");
-                        // Remove if exists but not running
-                        await SandboxService.exec(projectId, 'docker', ['rm', '-f', 'runnable-buildkit']);
-                        const bkResult = await SandboxService.exec(projectId, 'docker', [
-                            'run', '-d', '--name', 'runnable-buildkit', '--privileged', 'moby/buildkit:latest'
-                        ]);
-                        if (bkResult.exitCode !== 0) {
-                            await fs.appendFile(buildLogPath, `Failed to start BuildKit: ${bkResult.stderr}\n`);
-                            throw new Error("Failed to start BuildKit daemon");
-                        }
-                    }
-
-                    const buildkitEnv = {
-                        BUILDKIT_HOST: 'docker-container://runnable-buildkit'
-                    };
-
-                    // 0. Run build command (user-provided or auto-detected)
-                    if (effectiveBuildCommand) {
-                        await fs.appendFile(buildLogPath, `\n--- Build Command: ${effectiveBuildCommand} ---\n`);
-                        const buildEnv = { ...buildkitEnv, ...userEnv };
-                        const buildResult = await SandboxService.exec(projectId, 'sh', ['-c', effectiveBuildCommand], project.directoryPath, buildEnv);
-                        await logAndCheck(buildResult, 'Build');
-                    }
-
-                    // 1. Build image using railpack (Streaming)
-                    await fs.appendFile(buildLogPath, "\n--- Railpack Build (Streaming) ---\n");
-                    const buildExitCode = await SandboxService.spawn(projectId, 'railpack', ['build', '.', '--name', imageName], buildLogPath, project.directoryPath, buildkitEnv);
-
-                    if (buildExitCode !== 0) {
-                        throw new Error(`Railpack build failed with exit code ${buildExitCode}. See logs for details.`);
-                    }
-
-                    // 2. Kill existing container if any
+                    // Kill existing container if any
                     await SandboxService.exec(projectId, 'docker', ['rm', '-f', containerName]);
 
-                    // 3. Run container and map internal port to random host port
-                    const internalPort = project.internalPort || 8080;
-                    const runArgs = [
-                        'run', '-d',
-                        '--name', containerName,
-                        '-p', `0:${internalPort}`, // Dynamic host port mapping
-                        '-e', `PORT=${internalPort}`,
-                        '--restart', 'unless-stopped',
-                    ];
-
-                    // Inject user-defined environment variables
-                    Object.entries(userEnv).forEach(([key, value]) => {
-                        runArgs.push('-e', `${key}=${value}`);
-                    });
-
-                    runArgs.push(imageName);
-
-                    // Only override the container start command if the user explicitly set one.
-                    // Railpack's entrypoint is ["/bin/bash", "-c"] and handles setting up the
-                    // nix environment, PATH, and runtime dependencies. We must NOT replace that
-                    // with --entrypoint sh. Instead, pass the custom command as CMD args AFTER
-                    // the image name — Docker will feed it to Railpack's entrypoint as-is.
-                    if (project.startCommand) {
-                        runArgs.push(project.startCommand);
-                    }
-
-                    const runResult = await SandboxService.exec(projectId, 'docker', runArgs);
-                    await logAndCheck(runResult, 'Docker Run');
-
-                    // 4. Wait for the container to be running, then inspect the dynamic host port.
-                    let actualHostPort: number | null = null;
-                    for (let attempt = 0; attempt < 10; attempt++) {
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-
-                        const stateResult = await SandboxService.exec(projectId, 'docker', [
-                            'inspect', '--format', '{{.State.Status}}', containerName,
-                        ]);
-                        const state = stateResult.stdout.trim();
-                        await fs.appendFile(buildLogPath, `[Port wait] attempt ${attempt + 1}: container state = ${state}\n`);
-
-                        if (state === 'exited' || state === 'dead') {
-                            const crashLogs = await SandboxService.exec(projectId, 'docker', ['logs', '--tail', '50', containerName]);
-                            await fs.appendFile(buildLogPath, `--- Container Crash Logs ---\n${crashLogs.stdout}\n${crashLogs.stderr}\n`);
-                            throw new Error(
-                                `Container exited immediately (state: ${state}). Check start command and container logs.\n${crashLogs.stderr || crashLogs.stdout}`
-                            );
-                        }
-
-                        if (state === 'running') {
-                            const portResult = await SandboxService.exec(projectId, 'docker', ['port', containerName, String(internalPort)]);
-                            await fs.appendFile(buildLogPath, `--- Docker Port Inspect ---\nSTDOUT:\n${portResult.stdout}\nSTDERR:\n${portResult.stderr}\nEXIT CODE: ${portResult.exitCode}\n`);
-                            const match = portResult.stdout.match(/:(\d+)/);
-                            if (match) {
-                                actualHostPort = parseInt(match[1], 10);
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!actualHostPort) {
-                        const stateResult = await SandboxService.exec(projectId, 'docker', [
-                            'inspect', '--format', '{{.State.Status}}', containerName,
-                        ]);
-                        throw new Error(
-                            `Could not determine dynamic host port for Docker container after 10s. Container state: ${stateResult.stdout.trim()}`
-                        );
-                    }
-
-                    actualPort = actualHostPort;
+                    actualPort = await ProcessService.runAppContainerAndWaitForPort(project, containerName, userEnv, buildLogPath);
 
                     // Save container information to database. internalPort is left as
                     // stored — writing the 8080 fallback back would make a cleared
@@ -411,6 +179,302 @@ export class ProcessService {
         // Opportunistic build-cache GC. Fire-and-forget: enforceCap never
         // throws, and a deploy must never wait on (or fail from) a prune.
         void BuildCacheService.enforceCap();
+    }
+
+    // ── Shared build/run helpers (used by doStart and doDeploy) ─────────────
+
+    private static buildLogPathFor(project: Project): string {
+        const storageDir = path.resolve(config.hosting.servDir, '..');
+        return path.join(storageDir, 'logs', `${project.subdomain}-build.log`);
+    }
+
+    private static async logAndCheck(
+        buildLogPath: string,
+        result: { stdout: string; stderr: string; exitCode: number },
+        step: string,
+    ): Promise<void> {
+        const logContent = `\n--- ${step} ---\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}\nEXIT CODE: ${result.exitCode}\n\n`;
+        await fs.appendFile(buildLogPath, logContent);
+        if (result.exitCode !== 0) {
+            throw new Error(`${step} failed with exit code ${result.exitCode}. See logs for details.`);
+        }
+    }
+
+    private static composeBaseArgs(project: Project, composeName: string, composeFile: string): string[] {
+        const envFilePath = path.join(project.directoryPath, '.runnable.env');
+        return ['compose', '-p', composeName, '--env-file', envFilePath, '-f', composeFile];
+    }
+
+    /**
+     * Validate the compose file and write the project's env file. Screens the
+     * stack for host-escape directives BEFORE running it. Validates the output
+     * of `docker compose config` rather than the raw file: config applies
+     * ${VAR} interpolation (from the user-controlled env file), resolves YAML
+     * merge keys/anchors and `extends`, and normalizes volumes to long form —
+     * so the validated structure matches exactly what `up` will run. Enforced
+     * here (not at config-save) because the file is user-editable in the file
+     * browser until deploy.
+     *
+     * Returns the parsed normalized config so callers can also run the
+     * parallel-safety assessment without a second `config` invocation.
+     */
+    private static async validateComposeAndWriteEnv(
+        project: Project,
+        userEnv: Record<string, string>,
+        buildLogPath: string,
+        composeName: string,
+        composeFile: string,
+    ): Promise<any> {
+        if (!project.composeService) {
+            throw new Error(
+                'Compose deployment requires a "Primary Service" name. ' +
+                'Go to the project Settings tab and set the "Primary Service" field ' +
+                'to the name of the compose service that exposes the HTTP port.'
+            );
+        }
+
+        await fs.appendFile(buildLogPath, `\nUsing docker compose (file: ${composeFile}, service: ${project.composeService}, project: ${composeName})\n`);
+
+        // Confine the compose file to the project directory — it's
+        // passed to `docker compose -f` below.
+        const composeAbsPath = path.resolve(project.directoryPath, composeFile);
+        const projectBase = path.resolve(project.directoryPath);
+        if (composeAbsPath !== projectBase && !composeAbsPath.startsWith(projectBase + path.sep)) {
+            throw new Error('Compose file path is outside the project directory');
+        }
+
+        // Pre-scan the raw file for env_file/extends/include paths
+        // that would make the upcoming `docker compose config` (root)
+        // read host files. Must happen before config runs.
+        try {
+            const rawCompose = await fs.readFile(composeAbsPath, 'utf-8');
+            ComposePolicyService.validateRawReferences(rawCompose, project.directoryPath);
+        } catch (err: any) {
+            if (err instanceof Error && err.name === 'ComposePolicyError') {
+                await fs.appendFile(buildLogPath, `\n❌ Compose rejected by security policy: ${err.message}\n`);
+                throw new Error(`Compose file rejected: ${err.message}`);
+            }
+            throw new Error(`Compose file not found: ${composeFile}`);
+        }
+
+        // Write project env vars to a .runnable.env file so they are available
+        // for variable interpolation in the compose YAML and for `environment:`
+        // keys without explicit values.
+        const envFilePath = path.join(project.directoryPath, '.runnable.env');
+        const envFileContent = Object.entries(userEnv)
+            .map(([k, v]) => `${k}=${String(v).replace(/\n/g, '\\n')}`)
+            .join('\n');
+        await fs.writeFile(envFilePath, envFileContent + '\n');
+        await fs.appendFile(buildLogPath,
+            `Wrote ${Object.keys(userEnv).length} env var(s) to .runnable.env\n`);
+
+        const configResult = await SandboxService.exec(
+            project.id, 'docker',
+            [...ProcessService.composeBaseArgs(project, composeName, composeFile), 'config'],
+            project.directoryPath,
+        );
+        if (configResult.exitCode !== 0) {
+            await fs.appendFile(buildLogPath, `\n❌ Invalid compose file:\n${configResult.stderr}\n`);
+            throw new Error(`Invalid compose file: ${configResult.stderr.trim() || 'docker compose config failed'}`);
+        }
+        let doc: any;
+        try {
+            doc = parseYaml(configResult.stdout);
+            ComposePolicyService.validate(doc);
+        } catch (err: any) {
+            await fs.appendFile(buildLogPath, `\n❌ Compose rejected by security policy: ${err.message}\n`);
+            throw new Error(`Compose file rejected: ${err.message}`);
+        }
+        return doc;
+    }
+
+    /**
+     * `up --build -d` (streaming) on the given compose project name, then
+     * discover the primary service's published host port.
+     */
+    private static async composeUpAndWaitForPort(
+        project: Project,
+        composeName: string,
+        buildLogPath: string,
+        composeFile: string,
+        extraUpArgs: string[] = [],
+    ): Promise<number> {
+        const composeBase = ProcessService.composeBaseArgs(project, composeName, composeFile);
+
+        await fs.appendFile(buildLogPath, '\n--- Docker Compose Up (streaming) ---\n');
+        const composeExitCode = await SandboxService.spawn(
+            project.id, 'docker',
+            [...composeBase, 'up', '--build', '-d', ...extraUpArgs],
+            buildLogPath,
+            project.directoryPath,
+        );
+
+        if (composeExitCode !== 0) {
+            throw new Error(`docker compose up failed with exit code ${composeExitCode}. See build logs for details.`);
+        }
+
+        // Discover the host port published by the primary service
+        const composeService = project.composeService!;
+        const internalPort = project.internalPort || 8080;
+        let actualHostPort: number | null = null;
+
+        for (let attempt = 0; attempt < 15; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const portResult = await SandboxService.exec(
+                project.id, 'docker',
+                [...composeBase, 'port', composeService, String(internalPort)],
+                project.directoryPath,
+            );
+            await fs.appendFile(buildLogPath,
+                `[Port wait] attempt ${attempt + 1}: ${portResult.stdout.trim() || portResult.stderr.trim()}\n`);
+
+            const match = portResult.stdout.match(/:(\d+)/);
+            if (match) {
+                actualHostPort = parseInt(match[1], 10);
+                break;
+            }
+        }
+
+        if (!actualHostPort) {
+            const psResult = await SandboxService.exec(
+                project.id, 'docker',
+                [...composeBase, 'ps'],
+                project.directoryPath,
+            );
+            await fs.appendFile(buildLogPath, `--- Compose PS ---\n${psResult.stdout}\n`);
+            throw new Error(
+                `Could not determine host port for compose service "${composeService}" ` +
+                `(internal: ${internalPort}) after 15s. ` +
+                `Make sure the service exposes port ${internalPort} in the compose file.`
+            );
+        }
+        return actualHostPort;
+    }
+
+    /** BuildKit ensure + optional build command + Railpack image build (streaming). */
+    private static async buildAppImage(
+        project: Project,
+        effectiveBuildCommand: string | undefined,
+        userEnv: Record<string, string>,
+        buildLogPath: string,
+    ): Promise<void> {
+        const imageName = `runnable-img-${project.id.substring(0, 8)}`;
+
+        // Ensure BuildKit is running (required for railpack)
+        const buildkitCheck = await SandboxService.exec(project.id, 'docker', ['ps', '-a', '--filter', 'name=runnable-buildkit', '--format', '{{.Status}}']);
+        if (!buildkitCheck.stdout.includes('Up')) {
+            await fs.appendFile(buildLogPath, "Starting BuildKit daemon...\n");
+            // Remove if exists but not running
+            await SandboxService.exec(project.id, 'docker', ['rm', '-f', 'runnable-buildkit']);
+            const bkResult = await SandboxService.exec(project.id, 'docker', [
+                'run', '-d', '--name', 'runnable-buildkit', '--privileged', 'moby/buildkit:latest'
+            ]);
+            if (bkResult.exitCode !== 0) {
+                await fs.appendFile(buildLogPath, `Failed to start BuildKit: ${bkResult.stderr}\n`);
+                throw new Error("Failed to start BuildKit daemon");
+            }
+        }
+
+        const buildkitEnv = {
+            BUILDKIT_HOST: 'docker-container://runnable-buildkit'
+        };
+
+        // Run build command (user-provided or auto-detected)
+        if (effectiveBuildCommand) {
+            await fs.appendFile(buildLogPath, `\n--- Build Command: ${effectiveBuildCommand} ---\n`);
+            const buildEnv = { ...buildkitEnv, ...userEnv };
+            const buildResult = await SandboxService.exec(project.id, 'sh', ['-c', effectiveBuildCommand], project.directoryPath, buildEnv);
+            await ProcessService.logAndCheck(buildLogPath, buildResult, 'Build');
+        }
+
+        // Build image using railpack (Streaming)
+        await fs.appendFile(buildLogPath, "\n--- Railpack Build (Streaming) ---\n");
+        const buildExitCode = await SandboxService.spawn(project.id, 'railpack', ['build', '.', '--name', imageName], buildLogPath, project.directoryPath, buildkitEnv);
+
+        if (buildExitCode !== 0) {
+            throw new Error(`Railpack build failed with exit code ${buildExitCode}. See logs for details.`);
+        }
+    }
+
+    /**
+     * `docker run` the built image under the given container name (dynamic
+     * host port) and wait for the container to be running with a mapped port.
+     */
+    private static async runAppContainerAndWaitForPort(
+        project: Project,
+        containerName: string,
+        userEnv: Record<string, string>,
+        buildLogPath: string,
+    ): Promise<number> {
+        const imageName = `runnable-img-${project.id.substring(0, 8)}`;
+        const internalPort = project.internalPort || 8080;
+        const runArgs = [
+            'run', '-d',
+            '--name', containerName,
+            '-p', `0:${internalPort}`, // Dynamic host port mapping
+            '-e', `PORT=${internalPort}`,
+            '--restart', 'unless-stopped',
+        ];
+
+        // Inject user-defined environment variables
+        Object.entries(userEnv).forEach(([key, value]) => {
+            runArgs.push('-e', `${key}=${value}`);
+        });
+
+        runArgs.push(imageName);
+
+        // Only override the container start command if the user explicitly set one.
+        // Railpack's entrypoint is ["/bin/bash", "-c"] and handles setting up the
+        // nix environment, PATH, and runtime dependencies. We must NOT replace that
+        // with --entrypoint sh. Instead, pass the custom command as CMD args AFTER
+        // the image name — Docker will feed it to Railpack's entrypoint as-is.
+        if (project.startCommand) {
+            runArgs.push(project.startCommand);
+        }
+
+        const runResult = await SandboxService.exec(project.id, 'docker', runArgs);
+        await ProcessService.logAndCheck(buildLogPath, runResult, 'Docker Run');
+
+        // Wait for the container to be running, then inspect the dynamic host port.
+        let actualHostPort: number | null = null;
+        for (let attempt = 0; attempt < 10; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const stateResult = await SandboxService.exec(project.id, 'docker', [
+                'inspect', '--format', '{{.State.Status}}', containerName,
+            ]);
+            const state = stateResult.stdout.trim();
+            await fs.appendFile(buildLogPath, `[Port wait] attempt ${attempt + 1}: container state = ${state}\n`);
+
+            if (state === 'exited' || state === 'dead') {
+                const crashLogs = await SandboxService.exec(project.id, 'docker', ['logs', '--tail', '50', containerName]);
+                await fs.appendFile(buildLogPath, `--- Container Crash Logs ---\n${crashLogs.stdout}\n${crashLogs.stderr}\n`);
+                throw new Error(
+                    `Container exited immediately (state: ${state}). Check start command and container logs.\n${crashLogs.stderr || crashLogs.stdout}`
+                );
+            }
+
+            if (state === 'running') {
+                const portResult = await SandboxService.exec(project.id, 'docker', ['port', containerName, String(internalPort)]);
+                await fs.appendFile(buildLogPath, `--- Docker Port Inspect ---\nSTDOUT:\n${portResult.stdout}\nSTDERR:\n${portResult.stderr}\nEXIT CODE: ${portResult.exitCode}\n`);
+                const match = portResult.stdout.match(/:(\d+)/);
+                if (match) {
+                    actualHostPort = parseInt(match[1], 10);
+                    break;
+                }
+            }
+        }
+
+        if (!actualHostPort) {
+            const stateResult = await SandboxService.exec(project.id, 'docker', [
+                'inspect', '--format', '{{.State.Status}}', containerName,
+            ]);
+            throw new Error(
+                `Could not determine dynamic host port for Docker container after 10s. Container state: ${stateResult.stdout.trim()}`
+            );
+        }
+        return actualHostPort;
     }
 
     static stop(projectId: string): Promise<void> {
