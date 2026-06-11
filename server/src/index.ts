@@ -32,6 +32,7 @@ import adminRoutes from './routes/admin.routes';
 import systemRoutes from './routes/system.routes';
 import templateRoutes from './routes/templates.routes';
 import webhookRoutes from './routes/webhooks.routes';
+import internalRoutes from './routes/internal.routes';
 
 /**
  * Flip ADMIN_PASSWORD_RESET back to false in .env so a password reset only
@@ -217,6 +218,7 @@ async function bootstrap() {
     app.use('/api/system', systemRoutes);
     app.use('/api/templates', templateRoutes);
     app.use('/api/webhooks', webhookRoutes);
+    app.use('/api/internal', internalRoutes);
 
     // Error handler (must be last)
     app.use(errorHandler);
