@@ -388,6 +388,8 @@ export class ProcessService {
                 domain: cd.domain,
                 redirectTarget: cd.redirectTarget || null
             })) || [],
+            baseDomain: (project as any).baseDomain || undefined,
+            onDemandTls: (project as any).isPreview === true,
         });
         const configPath = await ServerConfigService.writeConfig(
             project.subdomain,

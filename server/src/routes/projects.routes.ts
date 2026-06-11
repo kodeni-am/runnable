@@ -317,6 +317,8 @@ router.post('/:id/reload-proxy', requireProjectAccess(ProjectPermission.CAN_EDIT
                 domain: cd.domain,
                 redirectTarget: cd.redirectTarget || null
             })) || [],
+            baseDomain: project.baseDomain || undefined,
+            onDemandTls: project.isPreview === true,
         });
 
         const configPath = await ServerConfigService.writeConfig(

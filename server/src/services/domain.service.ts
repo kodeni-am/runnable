@@ -157,6 +157,8 @@ export class DomainService {
                 domain: cd.domain,
                 redirectTarget: cd.redirectTarget || null
             })) || [],
+            baseDomain: project.baseDomain || undefined,
+            onDemandTls: project.isPreview === true,
         });
 
         await ServerConfigService.writeConfig(project.subdomain, configContent, project.serverType);
