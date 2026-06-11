@@ -8,7 +8,9 @@ import StatusBadge from '../components/StatusBadge';
 import FileBrowser from '../components/FileBrowser';
 import LogViewer from '../components/LogViewer';
 import ContainersViewer from '../components/ContainersViewer';
+import DeployActivityCard from '../components/DeployActivityCard';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useProjectSocket } from '../hooks/useProjectSocket';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
     FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus
@@ -83,6 +85,7 @@ export default function ProjectDetail() {
     // Notifications & health
     const [notificationWebhookUrl, setNotificationWebhookUrl] = useState('');
     const [autoRestart, setAutoRestart] = useState(false);
+    const [zeroDowntime, setZeroDowntime] = useState(true);
     // PR Previews
     const [previewsEnabled, setPreviewsEnabled] = useState(false);
     const [previewBaseDomain, setPreviewBaseDomain] = useState('');
@@ -117,6 +120,9 @@ export default function ProjectDetail() {
     const canViewSettings = isOwner || isAdmin || collabPermissions.canViewSettings;
     const canManageCollaborators = isOwner || isAdmin;
 
+    // Live status + deploy events (badge flips, activity card)
+    const { progress, finished, deployStartedAt, dismissFinished } = useProjectSocket(id);
+
     useEffect(() => {
         if (id) {
             fetchProject(id).then((res) => {
@@ -132,6 +138,7 @@ export default function ProjectDetail() {
                     setInternalPort(p.internalPort != null ? String(p.internalPort) : '');
                     setNotificationWebhookUrl(p.notificationWebhookUrl || '');
                     setAutoRestart(p.autoRestart || false);
+                    setZeroDowntime(p.zeroDowntime !== false);
                     setPreviewsEnabled(p.previewsEnabled || false);
                     setPreviewBaseDomain(p.previewBaseDomain || '');
                     setPreviewTtlDays(p.previewTtlDays != null ? String(p.previewTtlDays) : '7');
@@ -325,6 +332,7 @@ export default function ProjectDetail() {
                 internalPort: parsedPort ?? null,
                 notificationWebhookUrl: notificationWebhookUrl.trim() || null,
                 autoRestart,
+                zeroDowntime,
                 previewsEnabled,
                 previewBaseDomain: previewBaseDomain.trim() || null,
                 previewTtlDays: Number(previewTtlDays) || 7,
@@ -515,6 +523,13 @@ export default function ProjectDetail() {
             </div>
 
             <div className="page-content">
+                <DeployActivityCard
+                    project={p}
+                    progress={progress}
+                    finished={finished}
+                    deployStartedAt={deployStartedAt}
+                    onDismiss={dismissFinished}
+                />
                 <div className="tabs">
                     {availableTabs.map((t) => (
                         <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
@@ -647,6 +662,8 @@ export default function ProjectDetail() {
                             </div>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                {/* With zero-downtime deploys "latest failed, older still serving"
+                                    is common — Current is the first SUCCESSFUL row, not row 0 */}
                                 {deployments.map((d, index) => (
                                     <div key={d.id} className="glass" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', borderRadius: 10 }}>
                                         {d.status === 'success'
@@ -665,14 +682,36 @@ export default function ProjectDetail() {
                                                         Rollback
                                                     </span>
                                                 )}
-                                                {index === 0 && d.status === 'success' && (
+                                                {d.id === deployments.find(x => x.status === 'success')?.id && (
                                                     <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(100, 180, 255, 0.15)', color: '#64b4ff' }}>
                                                         Current
                                                     </span>
                                                 )}
+                                                {d.status === 'failed' && d.stillServing === true && (
+                                                    <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(234, 179, 8, 0.15)', color: 'var(--status-deploying)' }}>
+                                                        Previous version kept
+                                                    </span>
+                                                )}
+                                                {d.status === 'failed' && d.stillServing === false && (
+                                                    <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(229, 72, 77, 0.15)', color: 'var(--status-error, #e5484d)' }}>
+                                                        Service down
+                                                    </span>
+                                                )}
+                                                {d.healthGate === 'degraded' && (
+                                                    <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(234, 179, 8, 0.15)', color: 'var(--status-deploying)' }}>
+                                                        Health check timed out
+                                                    </span>
+                                                )}
                                             </div>
                                             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-                                                {d.branch} · {new Date(d.createdAt).toLocaleString()}
+                                                {d.branch}
+                                                {d.strategy && (
+                                                    <span title={d.strategyReason || undefined}> · {d.strategy}</span>
+                                                )}
+                                                {d.durationMs ? ` · ${d.durationMs >= 60000
+                                                    ? `${Math.floor(d.durationMs / 60000)}m ${Math.round((d.durationMs % 60000) / 1000)}s`
+                                                    : `${Math.round(d.durationMs / 1000)}s`}` : ''}
+                                                {' · '}{new Date(d.createdAt).toLocaleString()}
                                             </div>
                                         </div>
                                         {canStart && d.commitSha && d.status === 'success' && index !== 0 && (
@@ -1014,7 +1053,7 @@ export default function ProjectDetail() {
                                     </p>
                                 </div>
                                 {p.serverType === 'app' && (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 0 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                                         <label style={{ fontSize: 13, margin: 0 }}>Auto-restart on crash</label>
                                         <input
                                             type="checkbox"
@@ -1026,6 +1065,33 @@ export default function ProjectDetail() {
                                         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                                             Restart the container automatically if the health monitor finds it dead (max 3 restarts/hour)
                                         </span>
+                                    </div>
+                                )}
+                                {p.serverType === 'app' && (
+                                    <div style={{ marginBottom: 0 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                            <label style={{ fontSize: 13, margin: 0 }}>Zero-downtime deploys</label>
+                                            <input
+                                                type="checkbox"
+                                                checked={zeroDowntime}
+                                                onChange={(e) => setZeroDowntime(e.target.checked)}
+                                                disabled={!canEditConfig}
+                                                style={{ width: 16, height: 16, cursor: canEditConfig ? 'pointer' : 'default' }}
+                                            />
+                                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                                Keep the current version live while the new one builds; traffic switches only after the new version responds
+                                            </span>
+                                        </div>
+                                        {useCompose && (
+                                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, marginBottom: 0 }}>
+                                                Stacks with named volumes, fixed host ports, or container_name update in place — only changed
+                                                services restart. During the brief switchover both versions run, so background workers may
+                                                process jobs twice.
+                                            </p>
+                                        )}
+                                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, marginBottom: 0 }}>
+                                            Long-lived connections (websockets) reconnect within ~20s of the switch.
+                                        </p>
                                     </div>
                                 )}
                             </div>

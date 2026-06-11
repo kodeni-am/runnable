@@ -548,6 +548,157 @@ body {
   animation: pulse-status 0.8s infinite;
 }
 
+.status-building {
+  background: rgba(234, 179, 8, 0.12);
+  color: var(--status-deploying);
+}
+
+.status-building .status-dot {
+  background: var(--status-deploying);
+  animation: pulse-status 0.8s infinite;
+}
+
+/* ============ DEPLOY ACTIVITY CARD ============ */
+.deploy-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.deploy-card-ok { border-color: rgba(70, 167, 88, 0.45); }
+.deploy-card-warn { border-color: rgba(234, 179, 8, 0.45); }
+.deploy-card-error { border-color: rgba(229, 72, 77, 0.55); }
+
+.deploy-card-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.deploy-card-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.deploy-card-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.deploy-card-footer { margin-top: 2px; }
+.deploy-card-footer .deploy-card-meta { margin-left: 0; }
+
+.deploy-card-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+.deploy-card-dismiss:hover { color: inherit; }
+
+.deploy-icon-ok { color: var(--status-success, #46a758); flex-shrink: 0; }
+.deploy-icon-warn { color: var(--status-deploying); flex-shrink: 0; }
+.deploy-icon-err { color: var(--status-error, #e5484d); flex-shrink: 0; }
+
+.deploy-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+.deploy-chip-ok {
+  background: rgba(70, 167, 88, 0.15);
+  color: var(--status-success, #46a758);
+}
+.deploy-chip-warn {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--status-deploying);
+}
+
+.deploy-stepper {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin: 4px 0;
+}
+
+.deploy-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  position: relative;
+}
+
+/* connector line to the previous step */
+.deploy-step + .deploy-step::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  z-index: 0;
+}
+.deploy-step.done + .deploy-step::before,
+.deploy-step.done + .deploy-step.active::before {
+  background: rgba(70, 167, 88, 0.6);
+}
+
+.deploy-step-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  z-index: 1;
+}
+.deploy-step.done .deploy-step-dot { background: var(--status-success, #46a758); }
+.deploy-step.active .deploy-step-dot {
+  background: var(--status-deploying);
+  animation: pulse-status 0.8s infinite;
+}
+
+.deploy-step-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.deploy-step.active .deploy-step-label { color: inherit; }
+
+.deploy-card-logbtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  margin-left: auto;
+}
+.deploy-card-logbtn:hover { color: inherit; }
+
+.deploy-card-log {
+  margin-top: 4px;
+  max-height: 360px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
 /* ============ PROJECT DETAIL ============ */
 .detail-header {
   display: flex;
