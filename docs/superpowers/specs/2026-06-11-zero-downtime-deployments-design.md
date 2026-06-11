@@ -1,6 +1,6 @@
 # Zero-Downtime Deployments — Design
 
-**Date:** 2026-06-11 (rev 3, after two specialist review rounds)
+**Date:** 2026-06-11 (rev 4, after two infra review rounds + UX review)
 **Status:** Approved pending user review
 
 ## Problem
@@ -269,15 +269,129 @@ shared networks):
   (`projects.routes.ts:169`) and a settings-card toggle in the UI
   ("Zero-downtime deploys", with a one-line note that stateful compose
   stacks use in-place updates).
-- `Deployment.strategy?: string` — `'blue-green' | 'compose-inplace' |
-  'recreate'`, recorded by callers from the `{ ran, strategy }` result.
-  Nullable; old rows stay null.
+- `Deployment` gains four columns (all nullable; old rows stay null),
+  recorded by callers from the deploy result / `DeployError`:
+  - `strategy?: 'blue-green' | 'compose-inplace' | 'recreate'`
+  - `stillServing?: boolean` — for failed rows: did the old version keep
+    serving? The history view renders this distinction (see UX section).
+  - `durationMs?: number` — the cheapest, most-asked deploy metric.
+  - `healthGate?: 'passed' | 'degraded'` — degraded passes must be
+    queryable in history, not only grep-able in the build log.
+  - `strategyReason?: string` — the tier-3 fallback reason ("stack mounts
+    volumes: db:..."), already computed for the log line.
 - `ServiceStatus.DEPLOYING` already exists and is already set by redeploy
-  callers. The client badge for it **already exists too** —
-  `client/src/components/StatusBadge.tsx` handles `deploying` and
-  `client/src/index.css` defines `--status-deploying` (amber) — so no
-  badge work is needed; what's missing is only the live emit (tier 1,
-  step 1).
+  callers, and the badge styling exists
+  (`client/src/components/StatusBadge.tsx`, `--status-deploying` amber in
+  `client/src/index.css`). **But the client never connects to the socket**:
+  `socket.io-client` is a dependency imported nowhere in `client/src`, and
+  `projectStore.updateProjectStatus` has zero callers — status only changes
+  on refetch. Client socket wiring is therefore in scope (UX section below);
+  without it every live element of this feature is invisible.
+- New socket events to the existing `project:<id>` room:
+  - `deploy:progress` — `{ projectId, phase: 'building' | 'starting' |
+    'health-check' | 'switching' | 'updating-services' | 'retiring' |
+    'done', strategy, message?, ts }` (~6 emit sites in `doDeploy`).
+  - `deploy:finished` — `{ projectId, outcome: 'success' |
+    'failed-still-serving' | 'failed-down', strategy, durationMs,
+    healthGate, deploymentId? }`. Needed independently of the progress
+    stepper: the status transition `deploying → running` is identical for
+    success and failed-but-still-serving, so the client cannot render the
+    failure banner from `service:status` alone. Emitted via a shared helper
+    used by the callers (which own the failure contract).
+- New route: `GET /projects/:id/build-log` — tail of the existing on-disk
+  build log (`<subdomain>-build.log`). Today that file has no API route and
+  no UI surface, yet the spec sends tier reasons and degraded-pass warnings
+  there; without this route those messages are unreachable in-product.
+
+## Deployment visualization (UX)
+
+The feature's defining moment — "a deploy failed and visitors saw nothing" —
+must be visible, or it is indistinguishable from "nothing happened". The
+UI's core message during any deploy is **"your site is still up"**; an amber
+badge alone reads as "in transition, possibly broken", the opposite of the
+promise.
+
+### Client socket wiring (must-have, prerequisite)
+
+A `useProjectSocket(projectId)` hook connects, emits the existing
+`subscribe`, and pipes `service:status` into the already-existing-but-orphaned
+`projectStore.updateProjectStatus` (`client/src/store/projectStore.ts:64`),
+plus handles `deploy:progress` / `deploy:finished`. Server side is fully
+built and room-authorized already.
+
+### Deploy Activity Card (must-have)
+
+A transient card on the project page (`ProjectDetail.tsx`), between header
+and tabs, shown whenever status is `deploying` (socket-driven; deploys are
+usually webhook-triggered, so it must appear without user action — not a
+modal, not buried in a tab that's hidden for non-GitHub projects):
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ Deploying a4f9c12 — "fix: cart total rounding"            ⏱ 1m 42s │
+│   ●━━━━━━━━━●━━━━━━━━━◐╌╌╌╌╌╌╌╌╌○╌╌╌╌╌╌╌╌╌○                        │
+│   Build     Start     Health    Switch    Done                     │
+│             new       check     traffic                            │
+│ ✓ Site is up — previous version is serving traffic                 │
+│ Strategy: blue-green                            [View build log ▾] │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+- Phase stepper driven by `deploy:progress` (tier 3 relabels to Build →
+  Update services → Reconnect → Done). Main value: a 3-minute health-gate
+  wait looks intentional, not hung.
+- The green "site is up" chip is the product promise made visible. It must
+  work without a Deployment row (manual redeploys don't create rows).
+- "View build log" expands an embedded `LogConsole` pointed at the new
+  build-log route — `LogConsole` already live-tails by polling every 2 s
+  (`client/src/components/LogConsole.tsx:126`), so this is streaming for
+  free.
+- Terminal states: success auto-dismisses after ~5 s; **failed-but-still-
+  serving is sticky** (amber border, "✕ Deploy failed during build / ✓ Site
+  is up — previous version kept serving") — this is how a user learns that a
+  green-badged project had a failed push; **failed-down** is sticky with red
+  border and no green chip. Degraded pass adds one amber line ("⚠ Health
+  check timed out after 3m — traffic switched anyway").
+
+### Deployments history (should-have)
+
+Row meta becomes `main · blue-green · 2m 10s · <date>`; tier-3 reason in a
+tooltip on the strategy text (never inline); an amber pill when
+`healthGate: 'degraded'`; failed rows get a pill distinguishing "Previous
+version kept" (amber, calm) from "Service down" (red), driven by the new
+`stillServing` column. Also fix the "Current" pill logic
+(`ProjectDetail.tsx:668`): it tags `index === 0 && success`, so "latest
+failed, older still serving" — now a *common* state — would show no Current
+row; tag the first **successful** row instead.
+
+### Settings card (should-have)
+
+Follow the Auto-restart idiom (`ProjectDetail.tsx:1016-1030`): checkbox +
+one muted sentence, no red/alert styling — these are characteristics, not
+dangers, and a default-on feature must not look hazardous:
+
+> **Zero-downtime deploys** ☑
+> Keep the current version live while the new one builds; traffic switches
+> only after the new version responds.
+
+Conditional notes, shown only when relevant: if `useCompose`, the in-place
+fallback explanation + "background workers may briefly run twice during the
+switchover"; the websocket-reconnect caveat as small print for everyone.
+
+### Information hierarchy
+
+Primary: badge, card headline + still-up chip, elapsed time. Secondary:
+stepper, strategy, duration, commit. On-demand: tier-3 reason (tooltip),
+degraded detail (build log), caveats (settings small print). Outcome and
+safety are primary; mechanism secondary; rationale on demand.
+
+### Explicitly deferred (nice-to-have, not v1)
+
+- `.status-building` CSS + pulse animation on the deploying dot
+  (`building` is emitted today but unstyled — pre-existing).
+- `GET /projects/:id/deploy-strategy` dry-run endpoint so the settings card
+  can predict "this project will deploy via: in-place update (…)" before
+  the first deploy.
 
 ## Components
 
@@ -311,9 +425,12 @@ shared networks):
   status re-check, so a single stale snapshot cannot trigger action.)
 - **Callers** — `github.service.ts` (`handlePushEvent`,
   `rollbackToDeployment`), `preview.service.ts` (`redeployExisting`):
-  adopt the `DeployError.stillServing` contract and record
-  `Deployment.strategy`.
+  adopt the `DeployError.stillServing` contract, record the new Deployment
+  columns, and emit `deploy:finished` via a shared helper.
 - **Boot reconciliation** — `index.ts:98-113` as described above.
+- **Client** — `useProjectSocket` hook, Deploy Activity Card, build-log
+  viewer wiring, Deployments-tab row changes, settings toggle (UX section
+  above).
 
 ## Error handling summary
 
