@@ -10,6 +10,14 @@ import { DetectService } from './detect.service';
 import { ComposePolicyService } from './composePolicy.service';
 import { BuildCacheService } from './buildCache.service';
 import { parse as parseYaml } from 'yaml';
+import { assessParallelSafety } from './composeSafety';
+import { probeHttp } from './httpProbe';
+import {
+    containerGenerations, nextContainerGeneration,
+    composeGenerations, nextComposeGeneration,
+} from './deployNames';
+import { DeployError, DeployStrategy, HealthGateResult, DeployPhase } from './deployError';
+import { HealthMonitorService } from './healthMonitor.service';
 
 interface ManagedProcess {
     process: ChildProcess;
@@ -112,12 +120,14 @@ export class ProcessService {
                     const composeName = `runnable-${projectId.substring(0, 8)}`;
                     await ProcessService.validateComposeAndWriteEnv(project, userEnv, buildLogPath, composeName, composeFile);
 
-                    // Bring down any previous compose stack for this project
+                    // Bring down any previous compose stack for this project,
+                    // including orphaned blue-green generations
                     await SandboxService.exec(
                         projectId, 'docker',
                         [...ProcessService.composeBaseArgs(project, composeName, composeFile), 'down', '--remove-orphans'],
                         project.directoryPath,
                     );
+                    await ProcessService.sweepComposeGenerations(project, [composeName]);
 
                     actualPort = await ProcessService.composeUpAndWaitForPort(project, composeName, buildLogPath, composeFile);
                     // Store the compose project name in containerId so stop/logs can reference it
@@ -128,8 +138,8 @@ export class ProcessService {
                     // ── RAILPACK / DOCKERFILE DEPLOYMENT PATH ───────────────────────────
                     await ProcessService.buildAppImage(project, effectiveBuildCommand, userEnv, buildLogPath);
 
-                    // Kill existing container if any
-                    await SandboxService.exec(projectId, 'docker', ['rm', '-f', containerName]);
+                    // Kill existing container and any orphaned blue/green generations
+                    await ProcessService.sweepContainerGenerations(project, [], false);
 
                     actualPort = await ProcessService.runAppContainerAndWaitForPort(project, containerName, userEnv, buildLogPath);
 
@@ -477,6 +487,101 @@ export class ProcessService {
         return actualHostPort;
     }
 
+    // ── Blue-green generation sweeps ─────────────────────────────────────────
+
+    /**
+     * Read the port the on-disk proxy config currently routes to. Used by the
+     * sweep's adoption rule. Returns null when unknown.
+     */
+    private static async configuredProxyPort(project: Project): Promise<number | null> {
+        if (!project.configPath) return null;
+        try {
+            const content = await fs.readFile(project.configPath, 'utf-8');
+            const m = content.match(/localhost:(\d+)/);
+            return m ? parseInt(m[1], 10) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Remove orphaned blue/green generation containers — crashed deploys
+     * leave them behind with --restart unless-stopped, so they even survive
+     * host reboots. With `adopt`, a live orphan that the on-disk proxy config
+     * points at is ADOPTED instead of removed (it is the survivor of a crash
+     * between proxy switch and DB persist; removing it would take the serving
+     * container down). Returns the adopted name, if any.
+     */
+    private static async sweepContainerGenerations(
+        project: Project,
+        keep: string[],
+        adopt: boolean,
+    ): Promise<string | null> {
+        const base = `runnable-${project.id.substring(0, 8)}`;
+        const proxyPort = adopt ? await ProcessService.configuredProxyPort(project) : null;
+        let adopted: string | null = null;
+
+        for (const name of containerGenerations(base)) {
+            if (keep.includes(name)) continue;
+            // Anchored filter: docker's `name=` is an unanchored regex and the
+            // base name would otherwise match its own -blue/-green suffixes
+            const ps = await SandboxService.exec(project.id, 'docker',
+                ['ps', '-a', '--filter', `name=^${name}$`, '--format', '{{.State}}']);
+            if (!ps.stdout.trim()) continue;
+
+            if (adopt && proxyPort && ps.stdout.trim() === 'running') {
+                const internalPort = project.internalPort || 8080;
+                const portRes = await SandboxService.exec(project.id, 'docker', ['port', name, String(internalPort)]);
+                const m = portRes.stdout.match(/:(\d+)/);
+                if (m && parseInt(m[1], 10) === proxyPort) {
+                    adopted = name;
+                    continue;
+                }
+            }
+            await SandboxService.exec(project.id, 'docker', ['rm', '-f', name]).catch(() => { });
+        }
+        return adopted;
+    }
+
+    /**
+     * Tear down one compose generation. Prefers a full `down` (removes
+     * networks and locally built images via --rmi local); falls back to
+     * label-based container removal when the compose file is gone or no
+     * longer parses — `down -f <file>` would silently orphan everything.
+     */
+    private static async removeComposeGeneration(project: Project, genName: string): Promise<void> {
+        const composeFile = project.composeFile || 'docker-compose.yml';
+        const envFilePath = path.join(project.directoryPath, '.runnable.env');
+        const envFileArgs: string[] = [];
+        try {
+            await fs.access(envFilePath);
+            envFileArgs.push('--env-file', envFilePath);
+        } catch { /* env file not yet written */ }
+
+        const down = await SandboxService.exec(
+            project.id, 'docker',
+            ['compose', '-p', genName, ...envFileArgs, '-f', composeFile,
+                'down', '--remove-orphans', '--rmi', 'local'],
+            project.directoryPath,
+        ).catch(() => ({ exitCode: 1, stdout: '', stderr: '' }));
+        if (down.exitCode === 0) return;
+
+        const ps = await SandboxService.exec(project.id, 'docker',
+            ['ps', '-aq', '--filter', `label=com.docker.compose.project=${genName}`]);
+        const ids = ps.stdout.trim().split('\n').filter(Boolean);
+        if (ids.length) {
+            await SandboxService.exec(project.id, 'docker', ['rm', '-f', ...ids]).catch(() => { });
+        }
+    }
+
+    private static async sweepComposeGenerations(project: Project, keep: string[]): Promise<void> {
+        const base = `runnable-${project.id.substring(0, 8)}`;
+        for (const name of composeGenerations(base)) {
+            if (keep.includes(name)) continue;
+            await ProcessService.removeComposeGeneration(project, name);
+        }
+    }
+
     static stop(projectId: string): Promise<void> {
         return ProcessService.withProjectLock(projectId, () => ProcessService.doStop(projectId));
     }
@@ -514,6 +619,18 @@ export class ProcessService {
             // Revert the port from the dynamic host port to the container port
             // so a later config regeneration doesn't proxy to a stale port
             project.port = project.internalPort || 8080;
+        }
+
+        // Sweep ALL blue-green generations, not just containerId: a crashed
+        // deploy's orphan (running with --restart unless-stopped) exists
+        // precisely when containerId doesn't name it — without this, stop and
+        // project deletion leak it forever and pin its image.
+        if (project.serverType === ServerType.APP) {
+            if (project.useCompose) {
+                await ProcessService.sweepComposeGenerations(project, []).catch(() => { });
+            } else {
+                await ProcessService.sweepContainerGenerations(project, [], false).catch(() => { });
+            }
         }
 
         // Remove config
@@ -686,6 +803,7 @@ export class ProcessService {
             return [];
         }
 
+        const base = `runnable-${project.id.substring(0, 8)}`;
         try {
             if (project.useCompose) {
                 const composeFile = project.composeFile || 'docker-compose.yml';
@@ -696,18 +814,28 @@ export class ProcessService {
                     envFileArgs.push('--env-file', envFilePath);
                 } catch { /* env file not yet written */ }
 
-                const { stdout } = await SandboxService.exec(
-                    project.id, 'docker',
-                    ['compose', '-p', project.containerId, ...envFileArgs, '-f', composeFile,
-                        'ps', '-a', '--format', 'json'],
-                    project.directoryPath,
-                );
-                return ProcessService.parseComposePs(stdout);
+                // Query every generation project name so the incoming stack of
+                // an in-flight blue-green deploy is visible (e.g. its startup
+                // logs). Generations not present return no rows.
+                const names = new Set(composeGenerations(base));
+                names.add(project.containerId);
+                const all: Array<any> = [];
+                for (const name of names) {
+                    const { stdout } = await SandboxService.exec(
+                        project.id, 'docker',
+                        ['compose', '-p', name, ...envFileArgs, '-f', composeFile,
+                            'ps', '-a', '--format', 'json'],
+                        project.directoryPath,
+                    );
+                    all.push(...ProcessService.parseComposePs(stdout));
+                }
+                return all;
             }
 
+            // Match the active container and any blue/green generation
             const { stdout } = await SandboxService.exec(
                 project.id, 'docker',
-                ['ps', '-a', '--filter', `name=^${project.containerId}$`, '--format', 'json'],
+                ['ps', '-a', '--filter', `name=^${base}(-blue|-green)?$`, '--format', 'json'],
             );
             return ProcessService.parseDockerPs(stdout);
         } catch {
