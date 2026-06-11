@@ -174,6 +174,12 @@ cat > /etc/caddy/Caddyfile <<EOF
 {
     admin localhost:2019
     email ${ADMIN_EMAIL}
+
+    # Preview environments use on-demand TLS; Caddy asks the API before
+    # issuing a cert so only live preview hostnames get one.
+    on_demand_tls {
+        ask http://localhost:3001/api/internal/tls-check
+    }
 }
 
 # API server
@@ -423,6 +429,10 @@ echo "║  🔐 Google OAuth (optional):                           ║"
 echo "║     Create credentials at console.cloud.google.com     ║"
 echo "║     Callback: https://${DOMAIN}/api/auth/google/callback"
 echo "║     Then update GOOGLE_CLIENT_ID/SECRET in .env        ║"
+echo "║                                                        ║"
+echo "  • PR previews (optional): point a wildcard DNS record"
+echo "      *.preview.${DOMAIN}  →  this server's IP"
+echo "    then set the preview base domain to 'preview.${DOMAIN}' per project."
 echo "║                                                        ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
