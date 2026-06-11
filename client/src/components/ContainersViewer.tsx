@@ -19,6 +19,7 @@ function StateBadge({ state }: { state: string }) {
 export default function ContainersViewer({ projectId }: { projectId: string }) {
     const [containers, setContainers] = useState<ContainerInfo[]>([]);
     const [loadingList, setLoadingList] = useState(false);
+    const [error, setError] = useState('');
     const [selected, setSelected] = useState<ContainerInfo | null>(null);
 
     const fetchContainers = useCallback(async () => {
@@ -26,8 +27,9 @@ export default function ContainersViewer({ projectId }: { projectId: string }) {
         try {
             const { data } = await projectsApi.listContainers(projectId);
             setContainers(data.containers);
-        } catch {
-            setContainers([]);
+            setError('');
+        } catch (err: any) {
+            setError(err.response?.data?.error || 'Failed to load containers');
         }
         setLoadingList(false);
     }, [projectId]);
@@ -66,7 +68,11 @@ export default function ContainersViewer({ projectId }: { projectId: string }) {
                 </button>
             </div>
 
-            {containers.length === 0 ? (
+            {error ? (
+                <div className="container-empty" style={{ color: 'var(--status-error)' }}>
+                    {error}
+                </div>
+            ) : containers.length === 0 ? (
                 <div className="container-empty">
                     {loadingList ? 'Loading containers…' : 'No containers running. Start the project to see its containers.'}
                 </div>

@@ -95,15 +95,26 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
     const [issuesOnly, setIssuesOnly] = useState(false);
     const [wrap, setWrap] = useState(true);
     const [follow, setFollow] = useState(true);
-    const [expanded, setExpanded] = useState<Set<number>>(new Set());
+    const [expanded, setExpanded] = useState<Set<string>>(new Set());
+    const [fetchError, setFetchError] = useState(false);
     const endRef = useRef<HTMLDivElement>(null);
+    const seqRef = useRef(0);
 
     const load = useCallback(async () => {
         setLoading(true);
+        const seq = ++seqRef.current;
         try {
-            setLines(await fetchLogs());
+            const result = await fetchLogs();
+            // Ignore stale overlapping responses so an older request
+            // doesn't overwrite a newer one.
+            if (seq === seqRef.current) {
+                setLines(result);
+                setFetchError(false);
+            }
         } catch {
-            setLines(['Failed to fetch logs']);
+            // Keep the previous lines — a transient failure in Live mode
+            // shouldn't wipe the buffer.
+            if (seq === seqRef.current) setFetchError(true);
         }
         setLoading(false);
     }, [fetchLogs]);
@@ -245,13 +256,26 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
                 {shown.length < filtered.length && ` · showing last ${shown.length}`}
             </div>
 
+            {fetchError && (
+                <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '6px 12px', fontSize: 12, color: 'var(--status-error)',
+                }}>
+                    <AlertTriangle size={13} /> Failed to fetch logs — showing last known lines.
+                </div>
+            )}
+
             <div className={`lc-body ${wrap ? '' : 'lc-body--nowrap'}`}>
                 {shown.length === 0 ? (
                     <div className="lc-empty">{loading ? 'Loading…' : 'No matching log lines.'}</div>
                 ) : shown.map(({ p, i }) => {
-                    const isOpen = expanded.has(i);
+                    // Expansion is keyed by line content (stable under live
+                    // polling); the React key adds the index so duplicate log
+                    // lines don't produce duplicate keys.
+                    const key = p.raw;
+                    const isOpen = expanded.has(key);
                     return (
-                        <div key={i} className={`lc-line ${p.level ? `lc-line--${p.level}` : ''}`}>
+                        <div key={`${i}:${key.slice(0, 80)}`} className={`lc-line ${p.level ? `lc-line--${p.level}` : ''}`}>
                             {p.ts && (
                                 <span className="lc-ts" title={p.ts.toISOString()}>
                                     {p.ts.toLocaleTimeString()}
@@ -264,7 +288,7 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
                                         className="lc-json-toggle"
                                         onClick={() => setExpanded(prev => {
                                             const n = new Set(prev);
-                                            n.has(i) ? n.delete(i) : n.add(i);
+                                            n.has(key) ? n.delete(key) : n.add(key);
                                             return n;
                                         })}
                                         title="Toggle JSON formatting"

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from '@codemirror/view';
-import { EditorState } from '@codemirror/state';
+import { EditorState, Compartment } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
 import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';
@@ -67,6 +67,9 @@ export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNe
     // Store content to initialize the editor after DOM is ready
     const pendingContentRef = useRef<string | null>(null);
     const saveRef = useRef<() => void>(() => { });
+    // Language extension lives in a compartment so it can be reconfigured
+    // when the filename of a new file changes.
+    const languageCompartmentRef = useRef(new Compartment());
 
     // Keep saveRef always pointing to latest handleSave
     const handleSave = async () => {
@@ -127,7 +130,7 @@ export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNe
                 highlightSelectionMatches(),
                 syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
                 oneDark,
-                getLanguageExtension(filename),
+                languageCompartmentRef.current.of(getLanguageExtension(filename)),
                 ...(readOnly ? [EditorState.readOnly.of(true)] : []),
                 keymap.of([
                     ...defaultKeymap,
@@ -207,6 +210,17 @@ export default function CodeEditor({ projectId, filePath, onClose, onSaved, isNe
             pendingContentRef.current = null;
         }
     }, [loading]);
+
+    // For new files, the language is picked from newFileName at mount when
+    // it's still empty — reconfigure it as the user types a filename.
+    useEffect(() => {
+        if (!isNewFile || !viewRef.current) return;
+        viewRef.current.dispatch({
+            effects: languageCompartmentRef.current.reconfigure(
+                getLanguageExtension(newFileName || 'untitled.txt')
+            ),
+        });
+    }, [isNewFile, newFileName]);
 
     // Cleanup on unmount
     useEffect(() => {

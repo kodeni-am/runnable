@@ -45,7 +45,7 @@ export default function Admin() {
     const handleApprove = async (id: string) => {
         try {
             await adminApi.approveUser(id);
-            setUsers(users.map(u => u.id === id ? { ...u, isApproved: true } : u));
+            setUsers(prev => prev.map(u => u.id === id ? { ...u, isApproved: true } : u));
         } catch (err: any) {
             alert(err.response?.data?.error || 'Failed to approve user');
         }
@@ -57,7 +57,7 @@ export default function Admin() {
         }
         try {
             await adminApi.deleteUser(id);
-            setUsers(users.filter(u => u.id !== id));
+            setUsers(prev => prev.filter(u => u.id !== id));
         } catch (err: any) {
             alert(err.response?.data?.error || 'Failed to delete user');
         }
@@ -81,7 +81,7 @@ export default function Admin() {
                     : null,
             };
             await adminApi.updateUserPermissions(permUser.id, permsToSave);
-            setUsers(users.map(u => u.id === permUser.id ? { ...u, permissions: permsToSave } : u));
+            setUsers(prev => prev.map(u => u.id === permUser.id ? { ...u, permissions: permsToSave } : u));
             setPermUser(null);
         } catch (err: any) {
             alert(err.response?.data?.error || 'Failed to update permissions');

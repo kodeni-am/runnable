@@ -18,6 +18,7 @@ export default function Dashboard() {
     const [subdomain, setSubdomain] = useState('');
     const [serverType, setServerType] = useState('static');
     const [createError, setCreateError] = useState('');
+    const [creating, setCreating] = useState(false);
     const { createProject } = useProjectStore();
 
     useEffect(() => {
@@ -25,7 +26,9 @@ export default function Dashboard() {
     }, []);
 
     const handleCreate = async () => {
+        if (creating) return;
         setCreateError('');
+        setCreating(true);
         try {
             const project = await createProject(name, subdomain, serverType);
             setShowCreate(false);
@@ -35,6 +38,8 @@ export default function Dashboard() {
             navigate(`/projects/${project.id}`);
         } catch (err: any) {
             setCreateError(err.response?.data?.error || 'Failed to create project');
+        } finally {
+            setCreating(false);
         }
     };
 
@@ -160,7 +165,9 @@ export default function Dashboard() {
 
                         <div className="modal-actions">
                             <button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
-                            <button className="btn btn-primary" onClick={handleCreate} disabled={!name || !subdomain}>Create</button>
+                            <button className="btn btn-primary" onClick={handleCreate} disabled={!name || !subdomain || creating}>
+                                {creating ? <span className="spinner" /> : 'Create'}
+                            </button>
                         </div>
                     </div>
                 </div>

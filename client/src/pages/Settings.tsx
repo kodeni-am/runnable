@@ -40,6 +40,18 @@ export default function Settings() {
         }
     };
 
+    const handleConnect = async (url: string) => {
+        // The server identifies the linking user from the accessToken cookie,
+        // which expires after 15 min — refresh it first so a stale cookie
+        // doesn't silently link/log into the wrong account.
+        try {
+            await authApi.refresh();
+        } catch {
+            // ignore — proceed with the redirect regardless
+        }
+        window.location.href = url;
+    };
+
     const handleChangePassword = async (e: FormEvent) => {
         e.preventDefault();
         setPwError('');
@@ -173,13 +185,13 @@ export default function Settings() {
                                 {(user as any)?.githubId ? (
                                     <span style={{ color: 'var(--status-running)' }}>✓ Connected</span>
                                 ) : (
-                                    <a
-                                        href="/api/auth/github?redirect=/settings"
+                                    <button
+                                        onClick={() => handleConnect('/api/auth/github?redirect=/settings')}
                                         className="btn btn-secondary"
                                         style={{ fontSize: 13, padding: '6px 14px' }}
                                     >
                                         Connect GitHub
-                                    </a>
+                                    </button>
                                 )}
                             </div>
                         </div>
@@ -189,13 +201,13 @@ export default function Settings() {
                                 {(user as any)?.googleId ? (
                                     <span style={{ color: 'var(--status-running)' }}>✓ Connected</span>
                                 ) : (
-                                    <a
-                                        href="/api/auth/google?redirect=/settings"
+                                    <button
+                                        onClick={() => handleConnect('/api/auth/google?redirect=/settings')}
                                         className="btn btn-secondary"
                                         style={{ fontSize: 13, padding: '6px 14px' }}
                                     >
                                         Connect Google
-                                    </a>
+                                    </button>
                                 )}
                             </div>
                         </div>
