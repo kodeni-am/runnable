@@ -59,6 +59,7 @@ export interface Project {
     prNumber?: number;
     prBranch?: string;
     baseDomain?: string | null;
+    lastActivityAt?: string;
     userId: string;
     githubRepo?: {
         id: string;

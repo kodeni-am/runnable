@@ -33,7 +33,7 @@ export default function ProjectDetail() {
     const { currentProject, fetchProject, deleteProject, error: projectError } = useProjectStore();
     const { user: currentUser } = useAuthStore();
     usePageTitle(currentProject ? currentProject.name : 'Project Details');
-    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'deployments' | 'domains' | 'logs' | 'containers' | 'settings' | 'collaborators'>('overview');
+    const [tab, setTab] = useState<'overview' | 'files' | 'github' | 'deployments' | 'previews' | 'domains' | 'logs' | 'containers' | 'settings' | 'collaborators'>('overview');
     const [actionLoading, setActionLoading] = useState('');
 
     // GitHub connect state
@@ -59,6 +59,10 @@ export default function ProjectDetail() {
     const [deploymentsLoading, setDeploymentsLoading] = useState(false);
     const [rollbackLoading, setRollbackLoading] = useState('');
     const [deploymentsError, setDeploymentsError] = useState('');
+
+    // Preview environments state
+    const [previews, setPreviews] = useState<Project[]>([]);
+    const [previewsLoading, setPreviewsLoading] = useState(false);
 
     // Delete state
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -141,6 +145,7 @@ export default function ProjectDetail() {
         if (id && tab === 'domains') loadDomains();
         if (id && tab === 'collaborators') loadCollaborators();
         if (id && tab === 'deployments') loadDeployments();
+        if (id && tab === 'previews') loadPreviews();
     }, [id, tab]);
 
     const loadDomains = async () => {
@@ -174,6 +179,13 @@ export default function ProjectDetail() {
         setDeploymentsLoading(false);
     };
 
+    const loadPreviews = async () => {
+        if (!id) return;
+        setPreviewsLoading(true);
+        try { const { data } = await projectsApi.listPreviews(id); setPreviews(data); } catch { /* shown as empty */ }
+        setPreviewsLoading(false);
+    };
+
     const handleRollback = async (deployment: Deployment) => {
         if (!id || !deployment.commitSha) return;
         const shortSha = deployment.commitSha.slice(0, 7);
@@ -187,6 +199,12 @@ export default function ProjectDetail() {
             loadDeployments();
         }
         setRollbackLoading('');
+    };
+
+    const handleDestroyPreview = async (previewId: string) => {
+        if (!id || !confirm('Destroy this preview environment?')) return;
+        try { await projectsApi.destroyPreview(id, previewId); loadPreviews(); }
+        catch (err: any) { alert(err.response?.data?.error || 'Failed to destroy preview'); }
     };
 
     const handleAction = async (action: 'start' | 'stop' | 'restart') => {
@@ -437,6 +455,7 @@ export default function ProjectDetail() {
     if (canViewFiles) availableTabs.push('files');
     if (canViewGithub) availableTabs.push('github');
     if (canViewGithub && p?.githubRepo) availableTabs.push('deployments');
+    if (canViewGithub && p?.githubRepo && p?.previewsEnabled) availableTabs.push('previews');
     if (canViewDomains) availableTabs.push('domains');
     if (canViewLogs) availableTabs.push('logs');
     if (canViewLogs && p?.serverType === 'app') availableTabs.push('containers');
@@ -663,6 +682,68 @@ export default function ProjectDetail() {
                                                 disabled={!!rollbackLoading}
                                             >
                                                 {rollbackLoading === d.id ? <span className="spinner" /> : <RotateCcw size={14} />} Roll back
+                                            </button>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* PREVIEWS TAB */}
+                {tab === 'previews' && (
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                            <h3>Preview Environments</h3>
+                            <button className="btn btn-secondary" onClick={loadPreviews} disabled={previewsLoading}>
+                                <RotateCcw size={16} /> Refresh
+                            </button>
+                        </div>
+
+                        {previewsLoading ? (
+                            <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                                <div className="spinner" />
+                            </div>
+                        ) : previews.length === 0 ? (
+                            <div className="empty-state">
+                                <div className="empty-state-icon"><FolderGit2 size={36} /></div>
+                                <h2>No active previews</h2>
+                                <p>No active previews. Open a pull request to create one.</p>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                {previews.map((pv) => (
+                                    <div key={pv.id} className="glass" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', borderRadius: 10 }}>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                                <span style={{ fontWeight: 600, fontSize: 14 }}>PR #{pv.prNumber}</span>
+                                                {pv.prBranch && (
+                                                    <code style={{ fontSize: 13, fontFamily: 'monospace' }}>{pv.prBranch}</code>
+                                                )}
+                                                <StatusBadge status={pv.status} />
+                                            </div>
+                                            {pv.baseDomain && (
+                                                <div style={{ marginTop: 4 }}>
+                                                    <a
+                                                        href={`https://${pv.subdomain}.${pv.baseDomain}`}
+                                                        target="_blank"
+                                                        rel="noopener"
+                                                        style={{ color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}
+                                                    >
+                                                        https://{pv.subdomain}.{pv.baseDomain} <ExternalLink size={13} />
+                                                    </a>
+                                                </div>
+                                            )}
+                                            {pv.lastActivityAt && (
+                                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                    Last activity: {new Date(pv.lastActivityAt).toLocaleString()}
+                                                </div>
+                                            )}
+                                        </div>
+                                        {canStart && (
+                                            <button className="btn btn-danger" onClick={() => handleDestroyPreview(pv.id)} style={{ fontSize: 13, padding: '6px 12px' }}>
+                                                <Trash2 size={14} /> Destroy
                                             </button>
                                         )}
                                     </div>
