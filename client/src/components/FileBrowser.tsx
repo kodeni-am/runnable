@@ -53,6 +53,7 @@ export default function FileBrowser({ projectId, readOnly = false }: { projectId
     const [currentPath, setCurrentPath] = useState('');
     const [loading, setLoading] = useState(false);
     const [dragOver, setDragOver] = useState(false);
+    const [loadError, setLoadError] = useState('');
     const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null);
     const [editingFile, setEditingFile] = useState<string | null>(null);
     const [creatingNewFile, setCreatingNewFile] = useState(false);
@@ -62,12 +63,14 @@ export default function FileBrowser({ projectId, readOnly = false }: { projectId
 
     const loadFiles = async (path: string = '') => {
         setLoading(true);
+        setLoadError('');
         try {
             const { data } = await projectsApi.listFiles(projectId, path);
             setFiles(data);
             setCurrentPath(path);
-        } catch {
+        } catch (err: any) {
             setFiles([]);
+            setLoadError(err.response?.data?.error || 'Failed to load files');
         }
         setLoading(false);
     };
@@ -110,16 +113,20 @@ export default function FileBrowser({ projectId, readOnly = false }: { projectId
         } catch { }
     };
 
-    const handleDelete = async (e: React.MouseEvent, file: FileInfo) => {
+    const handleDelete = async (e: React.MouseEvent, file: FileInfo): Promise<boolean> => {
         e.stopPropagation();
-        if (!confirm(`Delete ${file.name}?`)) return;
+        if (!confirm(`Delete ${file.name}?`)) return false;
         try {
             await projectsApi.deleteFile(projectId, file.path);
             loadFiles(currentPath);
             if (editingFile === file.path) {
                 setEditingFile(null);
             }
-        } catch { }
+            return true;
+        } catch (err: any) {
+            alert(err.response?.data?.error || `Failed to delete ${file.name}`);
+            return false;
+        }
     };
 
     const handleUpload = async (fileList: FileList) => {
@@ -234,6 +241,10 @@ export default function FileBrowser({ projectId, readOnly = false }: { projectId
                             <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
                                 <div className="spinner" />
                             </div>
+                        ) : loadError ? (
+                            <div style={{ padding: 40, textAlign: 'center', color: 'var(--status-error)' }}>
+                                {loadError}
+                            </div>
                         ) : files.length === 0 ? (
                             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
                                 Empty directory
@@ -343,9 +354,9 @@ export default function FileBrowser({ projectId, readOnly = false }: { projectId
                                 <Download size={16} /> Download
                             </button>
                             {!readOnly && (
-                                <button className="btn btn-danger" style={{ flex: 1, padding: '10px', fontSize: 13 }} onClick={() => {
-                                    handleDelete(new MouseEvent('click') as any, selectedFile);
-                                    setSelectedFile(null);
+                                <button className="btn btn-danger" style={{ flex: 1, padding: '10px', fontSize: 13 }} onClick={async () => {
+                                    const deleted = await handleDelete(new MouseEvent('click') as any, selectedFile);
+                                    if (deleted) setSelectedFile(null);
                                 }}>
                                     <Trash2 size={16} /> Delete
                                 </button>

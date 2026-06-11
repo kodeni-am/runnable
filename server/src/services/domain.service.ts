@@ -43,10 +43,10 @@ export class DomainService {
         return { domain: customDomain, instructions };
     }
 
-    static async verifyDomain(domainId: string): Promise<boolean> {
+    static async verifyDomain(domainId: string, projectId: string): Promise<boolean> {
         const domainRepo = AppDataSource.getRepository(CustomDomain);
         const customDomain = await domainRepo.findOne({
-            where: { id: domainId },
+            where: { id: domainId, projectId },
             relations: ['project'],
         });
 
@@ -86,10 +86,10 @@ export class DomainService {
         return false;
     }
 
-    static async removeDomain(domainId: string): Promise<void> {
+    static async removeDomain(domainId: string, projectId: string): Promise<void> {
         const domainRepo = AppDataSource.getRepository(CustomDomain);
         const customDomain = await domainRepo.findOne({
-            where: { id: domainId },
+            where: { id: domainId, projectId },
             relations: ['project'],
         });
 
@@ -97,17 +97,16 @@ export class DomainService {
             throw new AppError('Domain not found', 404);
         }
 
-        const projectId = customDomain.project.id;
         await domainRepo.remove(customDomain);
 
         // Regenerate config without this domain
         await DomainService.regenerateProjectConfig(projectId);
     }
 
-    static async setRedirectTarget(domainId: string, redirectTarget: string | null): Promise<CustomDomain> {
+    static async setRedirectTarget(domainId: string, projectId: string, redirectTarget: string | null): Promise<CustomDomain> {
         const domainRepo = AppDataSource.getRepository(CustomDomain);
         const customDomain = await domainRepo.findOne({
-            where: { id: domainId },
+            where: { id: domainId, projectId },
             relations: ['project'],
         });
 

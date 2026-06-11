@@ -13,8 +13,8 @@ const router = Router();
 // All internal routes require authentication and admin approval
 router.use(authenticate, requireApproval);
 
-// List files (any collaborator can view)
-router.get('/:id/files', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
+// List files (requires canViewFiles)
+router.get('/:id/files', requireProjectAccess(ProjectPermission.CAN_VIEW_FILES), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
         const relativePath = (req.query.path as string) || '';
@@ -25,8 +25,8 @@ router.get('/:id/files', requireProjectAccess(), async (req: AuthRequest, res: R
     }
 });
 
-// Download file (any collaborator can view)
-router.get('/:id/files/download', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Download file (requires canViewFiles)
+router.get('/:id/files/download', requireProjectAccess(ProjectPermission.CAN_VIEW_FILES), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
         const filePath = req.query.path as string;
@@ -89,8 +89,8 @@ router.post('/:id/files/mkdir', requireProjectAccess(ProjectPermission.CAN_EDIT_
     }
 });
 
-// Read file content (any collaborator can view)
-router.get('/:id/files/read', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
+// Read file content (requires canViewFiles)
+router.get('/:id/files/read', requireProjectAccess(ProjectPermission.CAN_VIEW_FILES), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
         const filePath = req.query.path as string;

@@ -1,7 +1,8 @@
 import { Router, Response, NextFunction } from 'express';
 import { AppDataSource } from '../config/data-source';
 import { Project, CustomDomain } from '../entities';
-import { ProjectPermission } from '../entities/enums';
+import { DEFAULT_USER_PERMISSIONS } from '../entities/User';
+import { ProjectPermission, Role } from '../entities/enums';
 import { authenticate, requireApproval, requireProjectAccess, AuthRequest } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { DomainService } from '../services/domain.service';
@@ -12,7 +13,7 @@ const router = Router();
 router.use(authenticate, requireApproval);
 
 // List custom domains for a project
-router.get('/:id/domains', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.get('/:id/domains', requireProjectAccess(ProjectPermission.CAN_VIEW_DOMAINS), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
         const domainRepo = AppDataSource.getRepository(CustomDomain);
@@ -28,6 +29,11 @@ router.post('/:id/domains', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMA
     try {
         const project = (req as any).project as Project;
 
+        const userPerms = req.user!.permissions ?? DEFAULT_USER_PERMISSIONS;
+        if (!userPerms.canUseCustomDomains && req.user!.role !== Role.ADMIN) {
+            throw new AppError('You are not allowed to use custom domains', 403);
+        }
+
         const { domain, redirectTarget } = req.body;
         if (!domain) throw new AppError('Domain is required', 400);
 
@@ -35,7 +41,7 @@ router.post('/:id/domains', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMA
 
         // If they provided a redirect target right away, set it
         if (redirectTarget) {
-            await DomainService.setRedirectTarget(result.domain.id, redirectTarget);
+            await DomainService.setRedirectTarget(result.domain.id, project.id, redirectTarget);
             result.domain.redirectTarget = redirectTarget.trim().toLowerCase();
         }
 
@@ -53,7 +59,8 @@ router.put('/:id/domains/:domainId/redirect', requireProjectAccess(ProjectPermis
         // Setting it to null/empty string clears the redirect
         const target = redirectTarget ? String(redirectTarget).trim() : null;
 
-        const updatedDomain = await DomainService.setRedirectTarget(req.params.domainId as string, target);
+        const project = (req as any).project as Project;
+        const updatedDomain = await DomainService.setRedirectTarget(req.params.domainId as string, project.id, target);
 
         res.json(updatedDomain);
     } catch (error) {
@@ -64,7 +71,8 @@ router.put('/:id/domains/:domainId/redirect', requireProjectAccess(ProjectPermis
 // Verify domain DNS
 router.post('/:id/domains/:domainId/verify', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMAINS), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const verified = await DomainService.verifyDomain(req.params.domainId as string);
+        const project = (req as any).project as Project;
+        const verified = await DomainService.verifyDomain(req.params.domainId as string, project.id);
         res.json({ verified });
     } catch (error) {
         next(error);
@@ -74,7 +82,8 @@ router.post('/:id/domains/:domainId/verify', requireProjectAccess(ProjectPermiss
 // Remove custom domain
 router.delete('/:id/domains/:domainId', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMAINS), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        await DomainService.removeDomain(req.params.domainId as string);
+        const project = (req as any).project as Project;
+        await DomainService.removeDomain(req.params.domainId as string, project.id);
         res.json({ message: 'Domain removed' });
     } catch (error) {
         next(error);

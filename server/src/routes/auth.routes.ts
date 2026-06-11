@@ -39,7 +39,27 @@ if (config.github.clientId) {
             } as any, // Typecast to any to bypass passport-github2 type definitions missing passReqToCallback
             async (req: any, _accessToken: string, _refreshToken: string, profile: any, done: any) => {
                 try {
-                    const email = profile.emails?.[0]?.value || `${profile.username}@github.local`;
+                    let email = profile.emails?.[0]?.value || `${profile.username}@github.local`;
+                    // GitHub doesn't assert verification on the profile email — look it
+                    // up via the API so we never auto-link to an account the GitHub
+                    // user doesn't actually control.
+                    let emailVerified = false;
+                    try {
+                        const emailsRes = await fetch('https://api.github.com/user/emails', {
+                            headers: {
+                                Authorization: `token ${_accessToken}`,
+                                Accept: 'application/vnd.github.v3+json',
+                            },
+                        });
+                        if (emailsRes.ok) {
+                            const emails = await emailsRes.json() as Array<{ email: string; verified: boolean; primary: boolean }>;
+                            const primary = emails.find(e => e.primary && e.verified) || emails.find(e => e.verified);
+                            if (primary) {
+                                email = primary.email;
+                                emailVerified = true;
+                            }
+                        }
+                    } catch (e) { }
 
                     // Extract token from state if provided for linking
                     let reqToken: string | undefined;
@@ -56,6 +76,7 @@ if (config.github.clientId) {
                         provider: 'github',
                         id: profile.id,
                         email,
+                        emailVerified,
                         username: profile.username,
                         token: reqToken,
                         oauthAccessToken: _accessToken,
@@ -101,6 +122,7 @@ if (config.google.clientId) {
                         provider: 'google',
                         id: profile.id,
                         email,
+                        emailVerified: profile.emails?.[0]?.verified === true || profile._json?.email_verified === true,
                         username: profile.displayName?.replace(/\s+/g, '-').toLowerCase() || `user-${profile.id}`,
                         token: reqToken,
                         oauthAccessToken: _accessToken,
@@ -114,8 +136,29 @@ if (config.google.clientId) {
     );
 }
 
-// --- Cookie helper ---
+// --- Helpers ---
 const isProduction = config.nodeEnv === 'production';
+
+// Same user shape as GET /me, so the SPA gets isApproved and OAuth link state on login
+function serializeUser(user: import('../entities').User) {
+    return {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+        isApproved: user.isApproved,
+        githubId: user.githubId || null,
+        googleId: user.googleId || null,
+    };
+}
+
+// Only allow same-origin path redirects ("/foo"), never "//host" or "/\host"
+function sanitizeRedirect(redirect: unknown): string {
+    if (typeof redirect === 'string' && /^\/(?![/\\])/.test(redirect)) {
+        return redirect;
+    }
+    return '/auth/callback';
+}
 
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
     res.cookie('accessToken', accessToken, {
@@ -151,9 +194,7 @@ router.post('/register', authLimiter, async (req: Request, res: Response, next: 
         }
         const result = await AuthService.register(email, username, password);
         setAuthCookies(res, result.accessToken, result.refreshToken);
-        res.status(201).json({
-            user: { id: result.user.id, email: result.user.email, username: result.user.username, role: result.user.role },
-        });
+        res.status(201).json({ user: serializeUser(result.user) });
     } catch (error) {
         next(error);
     }
@@ -169,9 +210,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response, next: Nex
         }
         const result = await AuthService.login(email, password);
         setAuthCookies(res, result.accessToken, result.refreshToken);
-        res.json({
-            user: { id: result.user.id, email: result.user.email, username: result.user.username, role: result.user.role },
-        });
+        res.json({ user: serializeUser(result.user) });
     } catch (error) {
         next(error);
     }
@@ -201,16 +240,7 @@ router.post('/logout', (_req: Request, res: Response) => {
 
 // Get current user
 router.get('/me', authenticate, (req: AuthRequest, res: Response) => {
-    const user = req.user!;
-    res.json({
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-        isApproved: user.isApproved,
-        githubId: user.githubId || null,
-        googleId: user.googleId || null,
-    });
+    res.json(serializeUser(req.user!));
 });
 
 // Change password
@@ -263,7 +293,7 @@ router.get(
         let redirect = '/auth/callback';
         try {
             const state = JSON.parse(Buffer.from(req.query.state as string || '', 'base64').toString());
-            if (state.redirect) redirect = state.redirect;
+            if (state.redirect) redirect = sanitizeRedirect(state.redirect);
         } catch { }
         res.redirect(`${clientUrl}${redirect}`);
     }
@@ -287,7 +317,7 @@ router.get(
         let redirect = '/auth/callback';
         try {
             const state = JSON.parse(Buffer.from(req.query.state as string || '', 'base64').toString());
-            if (state.redirect) redirect = state.redirect;
+            if (state.redirect) redirect = sanitizeRedirect(state.redirect);
         } catch { }
         res.redirect(`${clientUrl}${redirect}`);
     }

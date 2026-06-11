@@ -97,7 +97,7 @@ router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => 
         // used to determine the highest assigned container port.
         const lastProject = await projectRepo
             .createQueryBuilder('project')
-            .orderBy('project.internalPort', 'DESC')
+            .orderBy('project.internalPort', 'DESC', 'NULLS LAST')
             .getOne();
         const port = (lastProject?.internalPort || 8999) + 1;
 
@@ -156,11 +156,16 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
         if (envVars !== undefined) project.envVars = envVars;
         if (port !== undefined) project.port = port;
         if (internalPort !== undefined) {
-            const n = Number(internalPort);
-            if (!Number.isInteger(n) || n < 1 || n > 65535) {
-                throw new AppError('internalPort must be an integer between 1 and 65535', 400);
+            if (internalPort === null) {
+                // Cleared by the user — fall back to the default (8080) at start time
+                project.internalPort = null as any;
+            } else {
+                const n = Number(internalPort);
+                if (!Number.isInteger(n) || n < 1 || n > 65535) {
+                    throw new AppError('internalPort must be an integer between 1 and 65535', 400);
+                }
+                project.internalPort = n;
             }
-            project.internalPort = n;
         }
         if (useCompose !== undefined) project.useCompose = useCompose;
         if (composeFile !== undefined) project.composeFile = composeFile;

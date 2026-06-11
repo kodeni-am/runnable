@@ -106,6 +106,7 @@ export class AuthService {
         provider: 'github' | 'google';
         id: string;
         email: string;
+        emailVerified?: boolean; // Whether the provider asserts the email is verified
         username: string;
         token?: string; // The user's current JWT token to link accounts
         oauthAccessToken?: string; // The provider's access token
@@ -129,8 +130,17 @@ export class AuthService {
             user = await userRepo().findOne({ where: { [field]: profile.id } });
 
             if (!user) {
-                // Check if user exists with same email
-                user = await userRepo().findOne({ where: { email: profile.email } });
+                // Check if user exists with same email — but only auto-link when the
+                // provider asserts the email is verified, otherwise an attacker could
+                // claim someone else's email on the provider and take over the account.
+                const existingByEmail = await userRepo().findOne({ where: { email: profile.email } });
+                if (existingByEmail && !profile.emailVerified) {
+                    throw new AppError(
+                        'An account with this email already exists. Log in with your password and link this provider from Settings.',
+                        409
+                    );
+                }
+                user = existingByEmail;
 
                 if (user) {
                     // Link OAuth account to existing user by email

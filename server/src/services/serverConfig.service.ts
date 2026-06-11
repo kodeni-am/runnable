@@ -94,12 +94,23 @@ export class ServerConfigService {
     }
 
     static generateNginxConfig(options: ServerConfigOptions): string {
+        const redirectedDomains = options.customDomains?.filter(d => Boolean(d.redirectTarget)) || [];
+        const normalCustomDomains = options.customDomains?.filter(d => !d.redirectTarget)?.map(d => d.domain) || [];
+
         const serverNames = [
             `${options.subdomain}.${config.hosting.baseDomain}`,
-            ...(options.customDomains || []),
+            ...normalCustomDomains,
         ].join(' ');
 
-        return `server {
+        const redirectBlocks = redirectedDomains.map(rd => `server {
+    listen 80;
+    server_name ${rd.domain};
+    return 301 https://${rd.redirectTarget}$request_uri;
+}
+
+`).join('');
+
+        return `${redirectBlocks}server {
     listen 80;
     server_name ${serverNames};
 
@@ -119,9 +130,20 @@ export class ServerConfigService {
 
     static generateApacheConfig(options: ServerConfigOptions): string {
         const serverName = `${options.subdomain}.${config.hosting.baseDomain}`;
-        const aliases = (options.customDomains || []).map(d => `    ServerAlias ${d}`).join('\n');
+        const redirectedDomains = options.customDomains?.filter(d => Boolean(d.redirectTarget)) || [];
+        const aliases = (options.customDomains || [])
+            .filter(d => !d.redirectTarget)
+            .map(d => `    ServerAlias ${d.domain}`)
+            .join('\n');
 
-        return `<VirtualHost *:80>
+        const redirectBlocks = redirectedDomains.map(rd => `<VirtualHost *:80>
+    ServerName ${rd.domain}
+    Redirect permanent / https://${rd.redirectTarget}/
+</VirtualHost>
+
+`).join('');
+
+        return `${redirectBlocks}<VirtualHost *:80>
     ServerName ${serverName}
 ${aliases}
 

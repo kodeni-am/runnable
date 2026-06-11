@@ -73,7 +73,15 @@ export const useAuthStore = create<AuthState>((set) => ({
             const { data } = await authApi.me();
             set({ user: data as User, isAuthenticated: true });
         } catch {
-            set({ user: null, isAuthenticated: false });
+            // Access token expires after 15 min — try the long-lived refresh
+            // cookie before giving up, so reloads don't log the user out.
+            try {
+                await authApi.refresh();
+                const { data } = await authApi.me();
+                set({ user: data as User, isAuthenticated: true });
+            } catch {
+                set({ user: null, isAuthenticated: false });
+            }
         }
     },
 

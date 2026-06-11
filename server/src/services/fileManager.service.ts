@@ -15,8 +15,11 @@ export class FileManagerService {
      * Validate that a file path doesn't escape the project directory (path traversal protection)
      */
     private static validatePath(baseDir: string, filePath: string): string {
-        const resolved = path.resolve(baseDir, filePath);
-        if (!resolved.startsWith(path.resolve(baseDir))) {
+        const base = path.resolve(baseDir);
+        const resolved = path.resolve(base, filePath);
+        // Require the resolved path to be the base dir itself or strictly inside it.
+        // A bare prefix check would let "../foo-bar" escape from base ".../foo".
+        if (resolved !== base && !resolved.startsWith(base + path.sep)) {
             throw new AppError('Invalid file path: path traversal detected', 400);
         }
         return resolved;

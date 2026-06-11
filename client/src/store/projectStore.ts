@@ -31,7 +31,13 @@ export const useProjectStore = create<ProjectState>((set) => ({
     },
 
     fetchProject: async (id) => {
-        set({ isLoading: true, error: null });
+        // Drop a previously-viewed project so the page never renders stale
+        // data (or acts on the wrong project) while the new one loads.
+        set((state) => ({
+            isLoading: true,
+            error: null,
+            currentProject: state.currentProject?.id === id ? state.currentProject : null,
+        }));
         try {
             const { data } = await projectsApi.get(id);
             set({ currentProject: data, isLoading: false });
