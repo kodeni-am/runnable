@@ -30,7 +30,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
 
         // Owned projects
         const ownedProjects = await projectRepo.find({
-            where: { userId: req.user!.id },
+            where: { userId: req.user!.id, isPreview: false },
             relations: ['githubRepo', 'customDomains'],
             order: { createdAt: 'DESC' },
         });
