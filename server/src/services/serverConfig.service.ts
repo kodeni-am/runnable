@@ -9,6 +9,10 @@ interface ServerConfigOptions {
     port: number;
     serverType: ServerType;
     customDomains?: { domain: string, redirectTarget: string | null }[];
+    /** Overrides config.hosting.baseDomain (preview environments). */
+    baseDomain?: string;
+    /** Emit `tls { on_demand }` so Caddy fetches the cert lazily (previews). */
+    onDemandTls?: boolean;
 }
 
 export class ServerConfigService {
@@ -37,6 +41,10 @@ export class ServerConfigService {
             }));
         }
 
+        if (options.baseDomain) {
+            options.baseDomain = ServerConfigService.sanitizeDomain(options.baseDomain);
+        }
+
         switch (options.serverType) {
             case ServerType.CADDY:
             case ServerType.STATIC:
@@ -52,11 +60,12 @@ export class ServerConfigService {
     }
 
     static generateCaddyConfig(options: ServerConfigOptions): string {
+        const baseDomain = options.baseDomain || config.hosting.baseDomain;
         const redirectedDomains = options.customDomains?.filter(d => Boolean(d.redirectTarget)) || [];
         const normalCustomDomains = options.customDomains?.filter(d => !d.redirectTarget)?.map(d => d.domain) || [];
 
         const mainDomains = [
-            `${options.subdomain}.${config.hosting.baseDomain}`,
+            `${options.subdomain}.${baseDomain}`,
             ...normalCustomDomains,
         ];
 
@@ -68,10 +77,13 @@ export class ServerConfigService {
         }
 
         const domainList = mainDomains.join(', ');
+        // Preview hostnames use on-demand TLS: Caddy fetches the cert on first
+        // request (gated by the tls-check ask endpoint) instead of up front.
+        const tlsBlock = options.onDemandTls ? '  tls {\n    on_demand\n  }\n' : '';
 
         if (options.serverType === ServerType.STATIC) {
             configStr += `${domainList} {
-  root * ${options.directoryPath}
+${tlsBlock}  root * ${options.directoryPath}
   file_server
   encode gzip zstd
   log {
@@ -81,7 +93,7 @@ export class ServerConfigService {
 `;
         } else {
             configStr += `${domainList} {
-  reverse_proxy localhost:${options.port}
+${tlsBlock}  reverse_proxy localhost:${options.port}
   encode gzip zstd
   log {
     output file /var/log/caddy/${options.subdomain}.log
