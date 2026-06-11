@@ -71,10 +71,10 @@ export default function DeployActivityCard({ project, progress, finished, deploy
 
     if (!deploying && !finished) return null;
 
-    // The reassurance chip is only true when an old version exists — the
-    // legacy recreate path takes the site down during the swap.
-    const strategy = progress?.strategy ?? finished?.strategy;
-    const showStillUpChip = strategy !== 'recreate';
+    // The reassurance chip is only true while the zero-downtime engine is
+    // running (deploy:progress events come only from it). Legacy
+    // restarts/recreates emit plain status changes and DO take the site down.
+    const showStillUpChip = !!progress && progress.strategy !== 'recreate';
 
     const logToggle = (
         <button className="deploy-card-logbtn" onClick={() => setShowLog((s) => !s)}>
