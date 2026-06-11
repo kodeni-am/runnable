@@ -1048,22 +1048,63 @@ export class ProcessService {
     }
 
     /**
-     * Pull-and-restart as one serialized unit. `prepare` (e.g. git pull) runs
+     * Zero-downtime when eligible — APP project, toggle on, and the active
+     * workload actually alive (DB status is useless here: callers set
+     * DEPLOYING before calling in). Everything else takes the legacy
+     * stop→start path. Emits deploy:finished either way so the UI can render
+     * the outcome; Deployment rows and notifications remain caller-owned.
+     */
+    private static async deployOrRecreate(projectId: string): Promise<Omit<RedeployResult, 'ran'>> {
+        const startedAt = Date.now();
+        try {
+            const projectRepo = AppDataSource.getRepository(Project);
+            const project = await projectRepo.findOne({ where: { id: projectId } });
+            const eligible = !!project
+                && project.serverType === ServerType.APP
+                && project.zeroDowntime
+                && !!project.containerId
+                && await ProcessService.isActiveLive(project);
+
+            let outcome: DeployOutcome;
+            if (eligible) {
+                outcome = await ProcessService.doDeploy(projectId);
+            } else {
+                await ProcessService.doStop(projectId);
+                await ProcessService.doStart(projectId);
+                outcome = { strategy: 'recreate', healthGate: 'passed' };
+            }
+            const durationMs = Date.now() - startedAt;
+            ProcessService.emitDeployFinished(projectId, {
+                outcome: 'success', strategy: outcome.strategy, durationMs, healthGate: outcome.healthGate,
+            });
+            return { ...outcome, durationMs };
+        } catch (err: any) {
+            const stillServing = err instanceof DeployError && err.stillServing;
+            ProcessService.emitDeployFinished(projectId, {
+                outcome: stillServing ? 'failed-still-serving' : 'failed-down',
+                strategy: err instanceof DeployError ? err.strategy : 'recreate',
+                durationMs: Date.now() - startedAt,
+            });
+            throw err;
+        }
+    }
+
+    /**
+     * Pull-and-redeploy as one serialized unit. `prepare` (e.g. git pull) runs
      * inside the project lock so it cannot mutate the working tree while an
      * in-flight build is copying it. Bursts coalesce: if a redeploy is already
      * queued behind a running one, new requests are dropped — the queued run
-     * pulls the latest code anyway. Returns false when the request was
-     * dropped, so callers don't record a deployment that never ran.
+     * pulls the latest code anyway. Returns { ran: false } when the request
+     * was dropped, so callers don't record a deployment that never ran.
      */
-    static redeploy(projectId: string, prepare: () => Promise<void>): Promise<boolean> {
-        if (ProcessService.queuedRedeploys.has(projectId)) return Promise.resolve(false);
+    static redeploy(projectId: string, prepare: () => Promise<void>): Promise<RedeployResult> {
+        if (ProcessService.queuedRedeploys.has(projectId)) return Promise.resolve({ ran: false });
         ProcessService.queuedRedeploys.add(projectId);
         return ProcessService.withProjectLock(projectId, async () => {
             ProcessService.queuedRedeploys.delete(projectId);
             await prepare();
-            await ProcessService.doStop(projectId);
-            await ProcessService.doStart(projectId);
-            return true;
+            const result = await ProcessService.deployOrRecreate(projectId);
+            return { ran: true, ...result };
         });
     }
 
@@ -1071,11 +1112,11 @@ export class ProcessService {
      * Like redeploy(), but never coalesced. Used for rollbacks, where dropping
      * the request would leave the project on the wrong commit.
      */
-    static redeployExclusive(projectId: string, prepare: () => Promise<void>): Promise<void> {
+    static redeployExclusive(projectId: string, prepare: () => Promise<void>): Promise<RedeployResult> {
         return ProcessService.withProjectLock(projectId, async () => {
             await prepare();
-            await ProcessService.doStop(projectId);
-            await ProcessService.doStart(projectId);
+            const result = await ProcessService.deployOrRecreate(projectId);
+            return { ran: true, ...result };
         });
     }
 

@@ -3,6 +3,7 @@ import { Project, GithubRepo, ServiceStatus, ServerType, User } from '../entitie
 import { ProjectProvisioningService } from './projectProvisioning.service';
 import { ProjectTeardownService } from './projectTeardown.service';
 import { ProcessService } from './process.service';
+import { DeployError } from './deployError';
 import { GithubService } from './github.service';
 import { NotificationService } from './notification.service';
 import { isForkPR, derivePreviewSubdomain, mergePreviewEnv, previewHostname, isPreviewExpired, type PullRequestInfo } from './preview.helpers';
@@ -149,25 +150,39 @@ export class PreviewService {
     private static async redeployExisting(preview: Project, pr: PullRequestInfo): Promise<void> {
         await AppDataSource.getRepository(Project).update(preview.id, { status: ServiceStatus.DEPLOYING });
         try {
-            const ran = await ProcessService.redeploy(preview.id, async () => {
+            const result = await ProcessService.redeploy(preview.id, async () => {
                 await GithubService.pullLatest(preview.id, preview.directoryPath, pr.head.ref);
             });
-            if (ran) {
+            if (result.ran) {
                 await AppDataSource.getRepository(Project).update(preview.id, { lastActivityAt: new Date() });
                 await GithubService.recordDeployment(preview.id, {
                     status: 'success', trigger: 'webhook', branch: pr.head.ref,
                     commitMessage: `Preview update for PR #${pr.number}`,
+                    strategy: result.strategy,
+                    durationMs: result.durationMs,
+                    healthGate: result.healthGate,
+                    strategyReason: result.strategyReason,
                 });
             }
         } catch (error: any) {
-            await AppDataSource.getRepository(Project).update(preview.id, { status: ServiceStatus.ERROR });
+            // Failed zero-downtime preview update → the previous preview
+            // build keeps serving; reflect RUNNING, not ERROR.
+            const stillServing = error instanceof DeployError && error.stillServing;
+            await AppDataSource.getRepository(Project).update(preview.id, {
+                status: stillServing ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
+            });
+            if (stillServing) ProcessService.emitStatus(preview.id, ServiceStatus.RUNNING);
             await GithubService.recordDeployment(preview.id, {
                 status: 'failed', trigger: 'webhook', branch: pr.head.ref, error: error?.message,
+                stillServing,
+                strategy: error instanceof DeployError ? error.strategy : undefined,
             }).catch(() => { });
             await NotificationService.notify(preview, {
                 event: 'preview.failed',
                 title: `Preview update for PR #${pr.number} failed`,
-                message: error?.message || 'Preview redeploy failed',
+                message: stillServing
+                    ? `${error?.message || 'Preview redeploy failed'} — previous preview build kept serving.`
+                    : error?.message || 'Preview redeploy failed',
                 success: false,
                 meta: { pr: String(pr.number), branch: pr.head.ref },
             });
