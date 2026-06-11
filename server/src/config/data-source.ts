@@ -16,6 +16,7 @@ import { AddDeployments1772636000000 } from '../migrations/1772636000000-AddDepl
 import { AddNotificationsAndAutoRestart1772637000000 } from '../migrations/1772637000000-AddNotificationsAndAutoRestart';
 import { AddTokenVersion1772638000000 } from '../migrations/1772638000000-AddTokenVersion';
 import { AddPreviewColumns1772639000000 } from '../migrations/1772639000000-AddPreviewColumns';
+import { AddBuildCacheKeepGB1772640000000 } from '../migrations/1772640000000-AddBuildCacheKeepGB';
 
 export const AppDataSource = new DataSource({
     type: 'postgres',
@@ -28,6 +29,6 @@ export const AppDataSource = new DataSource({
     migrationsRun: true, // Auto-run pending migrations on startup
     logging: config.nodeEnv === 'development',
     entities: [User, Project, GithubRepo, CustomDomain, AppSettings, ProjectCollaborator, Deployment],
-    migrations: [InitialSchema1709520000000, AddDomainRedirectTarget1772633000000, AddPermissions1772634000000, AddComposeSupport1772635000000, AddDeployments1772636000000, AddNotificationsAndAutoRestart1772637000000, AddTokenVersion1772638000000, AddPreviewColumns1772639000000],
+    migrations: [InitialSchema1709520000000, AddDomainRedirectTarget1772633000000, AddPermissions1772634000000, AddComposeSupport1772635000000, AddDeployments1772636000000, AddNotificationsAndAutoRestart1772637000000, AddTokenVersion1772638000000, AddPreviewColumns1772639000000, AddBuildCacheKeepGB1772640000000],
     subscribers: [],
 });

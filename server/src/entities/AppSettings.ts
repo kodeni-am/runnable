@@ -17,4 +17,8 @@ export class AppSettings {
 
     @Column()
     servDir: string;
+
+    // Build-cache GC cap in GB. 0 disables post-deploy enforcement.
+    @Column({ default: 10 })
+    buildCacheKeepGB: number;
 }
