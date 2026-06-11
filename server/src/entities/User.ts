@@ -24,6 +24,30 @@ export const DEFAULT_USER_PERMISSIONS: UserPermissions = {
     allowedServerTypes: null,
 };
 
+/**
+ * Coerce untrusted input into a well-formed permissions object: unknown keys
+ * are dropped, wrong-typed values fall back to the defaults. These values
+ * drive enforcement in the project routes, so arbitrary JSON must never be
+ * persisted.
+ */
+export function sanitizeUserPermissions(input: unknown): UserPermissions {
+    const perms = { ...DEFAULT_USER_PERMISSIONS };
+    if (input && typeof input === 'object') {
+        const i = input as Record<string, unknown>;
+        if (i.maxProjects === null || (typeof i.maxProjects === 'number' && Number.isInteger(i.maxProjects) && i.maxProjects >= 0)) {
+            perms.maxProjects = i.maxProjects as number | null;
+        }
+        if (typeof i.canCreateProjects === 'boolean') perms.canCreateProjects = i.canCreateProjects;
+        if (typeof i.canUseCustomDomains === 'boolean') perms.canUseCustomDomains = i.canUseCustomDomains;
+        if (i.allowedServerTypes === null) {
+            perms.allowedServerTypes = null;
+        } else if (Array.isArray(i.allowedServerTypes)) {
+            perms.allowedServerTypes = i.allowedServerTypes.filter((s): s is string => typeof s === 'string');
+        }
+    }
+    return perms;
+}
+
 @Entity('users')
 export class User {
     @PrimaryGeneratedColumn('uuid')

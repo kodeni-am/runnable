@@ -1,13 +1,13 @@
 import { Router, NextFunction } from 'express';
 import os from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { readFile } from 'fs/promises';
 import { promisify } from 'util';
 import { authenticate, requireRole } from '../middleware/auth';
 import { Role } from '../entities';
 import { config } from '../config';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const router = Router();
 
@@ -63,7 +63,7 @@ async function getDisk(path: string): Promise<DiskInfo> {
         return diskCache.value;
     }
     try {
-        const { stdout } = await execAsync(`df -kP "${path}"`);
+        const { stdout } = await execFileAsync('df', ['-kP', path]);
         const line = stdout.trim().split('\n')[1] || '';
         const cols = line.split(/\s+/);
         // Filesystem 1024-blocks Used Available Capacity Mounted-on
@@ -107,7 +107,7 @@ async function readNetCounters(): Promise<{ rx: number; tx: number }> {
             // `netstat -ibn` repeats a row per address; the first row per
             // interface carries the cumulative byte totals. Columns from the
             // end are stable: ... Ibytes Opkts Oerrs Obytes Coll
-            const { stdout } = await execAsync('netstat -ibn');
+            const { stdout } = await execFileAsync('netstat', ['-ibn']);
             const seen = new Set<string>();
             for (const line of stdout.trim().split('\n').slice(1)) {
                 const c = line.trim().split(/\s+/);

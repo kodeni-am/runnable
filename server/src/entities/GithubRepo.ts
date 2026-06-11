@@ -24,7 +24,12 @@ export class GithubRepo {
     @Column({ nullable: true })
     webhookId?: string;
 
-    @Column({ nullable: true })
+    /**
+     * HMAC secret for webhook verification. Never selected by default — it
+     * would otherwise serialize into project responses, letting any
+     * collaborator forge signed webhook deliveries.
+     */
+    @Column({ nullable: true, select: false })
     webhookSecret?: string;
 
     @Column({ type: 'timestamp', nullable: true })

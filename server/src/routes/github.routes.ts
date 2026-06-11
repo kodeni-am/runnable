@@ -36,12 +36,15 @@ router.post('/webhooks/github', async (req: Request, res: Response, next: NextFu
             return;
         }
 
-        // Find the project by repo URL
+        // Find the project by repo URL. webhookSecret is select: false, so it
+        // must be selected explicitly here — this route is its only consumer.
         const githubRepoRepo = AppDataSource.getRepository(GithubRepo);
-        const githubRepo = await githubRepoRepo.findOne({
-            where: { repoUrl },
-            relations: ['project'],
-        });
+        const githubRepo = await githubRepoRepo
+            .createQueryBuilder('repo')
+            .addSelect('repo.webhookSecret')
+            .leftJoinAndSelect('repo.project', 'project')
+            .where('repo.repoUrl = :repoUrl', { repoUrl })
+            .getOne();
 
         if (!githubRepo || !githubRepo.webhookSecret) {
             res.status(404).json({ error: 'Repo not found' });

@@ -1,6 +1,7 @@
 import { Router, Response, NextFunction } from 'express';
 import { AppDataSource } from '../config/data-source';
 import { User, Role } from '../entities';
+import { sanitizeUserPermissions } from '../entities/User';
 import { authenticate, requireRole } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 
@@ -57,7 +58,7 @@ router.put('/users/:id/permissions', async (req, res, next: NextFunction) => {
             throw new AppError('Permissions object is required', 400);
         }
 
-        user.permissions = permissions;
+        user.permissions = sanitizeUserPermissions(permissions);
         await userRepo.save(user);
 
         res.json({ message: 'Permissions updated', permissions: user.permissions });

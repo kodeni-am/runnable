@@ -35,6 +35,22 @@ export const DEFAULT_PROJECT_PERMISSIONS: ProjectPermissions = {
     canViewSettings: true,
 };
 
+/**
+ * Coerce untrusted input into a well-formed permissions object: unknown keys
+ * are dropped, non-boolean values fall back to the defaults. These flags gate
+ * requireProjectAccess, so arbitrary JSON must never be persisted.
+ */
+export function sanitizeProjectPermissions(input: unknown): ProjectPermissions {
+    const perms = { ...DEFAULT_PROJECT_PERMISSIONS };
+    if (input && typeof input === 'object') {
+        for (const key of Object.keys(perms) as (keyof ProjectPermissions)[]) {
+            const value = (input as Record<string, unknown>)[key];
+            if (typeof value === 'boolean') perms[key] = value;
+        }
+    }
+    return perms;
+}
+
 @Entity('project_collaborators')
 @Unique(['userId', 'projectId'])
 export class ProjectCollaborator {

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 
 export class AppError extends Error {
     statusCode: number;
@@ -22,6 +23,13 @@ export const errorHandler = (
         res.status(err.statusCode).json({
             error: err.message,
         });
+        return;
+    }
+
+    // Upload limit violations are client errors, not server faults
+    if (err instanceof multer.MulterError) {
+        const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        res.status(status).json({ error: `Upload rejected: ${err.message}` });
         return;
     }
 
