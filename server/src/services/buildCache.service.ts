@@ -19,9 +19,11 @@ import {
 const execFileAsync = promisify(execFile);
 // Prunes of tens of GB can take minutes; outputs can be large.
 const EXEC_OPTS = { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 };
-// Read-only usage queries must fail fast — a wedged daemon should not
-// hold the admin UI for the full prune timeout.
-const READ_OPTS = { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 };
+// Read-only usage queries get a shorter timeout than prunes so a wedged
+// daemon doesn't hold the admin UI for 10 minutes — but `docker system df`
+// legitimately takes 30s+ when the build cache holds ~1000 entries
+// (observed in production), so this must stay well above that.
+const READ_OPTS = { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 };
 
 export interface BuildCacheUsage {
     daemonBytes: number;
