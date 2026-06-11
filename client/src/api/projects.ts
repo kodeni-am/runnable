@@ -50,6 +50,7 @@ export interface Project {
     composeService?: string;
     notificationWebhookUrl?: string | null;
     autoRestart?: boolean;
+    zeroDowntime?: boolean;
     previewsEnabled?: boolean;
     previewBaseDomain?: string | null;
     previewEnvOverrides?: Record<string, string> | null;
@@ -106,6 +107,11 @@ export interface Deployment {
     status: 'success' | 'failed';
     trigger: 'webhook' | 'rollback';
     error?: string | null;
+    strategy?: 'blue-green' | 'compose-inplace' | 'recreate' | null;
+    stillServing?: boolean | null;
+    durationMs?: number | null;
+    healthGate?: 'passed' | 'degraded' | null;
+    strategyReason?: string | null;
     createdAt: string;
 }
 

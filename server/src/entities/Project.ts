@@ -86,6 +86,10 @@ export class Project {
     @Column({ default: false })
     autoRestart: boolean;
 
+    /** Blue-green deploys: keep the old container serving while the new one builds */
+    @Column({ default: true })
+    zeroDowntime: boolean;
+
     // ── Preview / PR deployments ──────────────────────────────────────────────
 
     /** Parent-project config: enable ephemeral per-PR preview environments */

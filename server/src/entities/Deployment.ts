@@ -11,6 +11,8 @@ import { Project } from './Project';
 
 export type DeploymentStatus = 'success' | 'failed';
 export type DeploymentTrigger = 'webhook' | 'rollback';
+export type DeployStrategyValue = 'blue-green' | 'compose-inplace' | 'recreate';
+export type HealthGateValue = 'passed' | 'degraded';
 
 @Entity('deployments')
 export class Deployment {
@@ -42,6 +44,24 @@ export class Deployment {
 
     @Column({ type: 'text', nullable: true })
     error?: string;
+
+    /** How the deploy ran. Null for rows predating zero-downtime deploys. */
+    @Column({ type: 'varchar', nullable: true })
+    strategy?: DeployStrategyValue;
+
+    /** For failed rows: did the previous version keep serving? */
+    @Column({ type: 'boolean', nullable: true })
+    stillServing?: boolean;
+
+    @Column({ type: 'integer', nullable: true })
+    durationMs?: number;
+
+    @Column({ type: 'varchar', nullable: true })
+    healthGate?: HealthGateValue;
+
+    /** Tier-3 fallback reason, e.g. "service db mounts named volume pgdata" */
+    @Column({ type: 'text', nullable: true })
+    strategyReason?: string;
 
     @CreateDateColumn()
     createdAt: Date;

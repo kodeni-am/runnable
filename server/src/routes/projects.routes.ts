@@ -172,6 +172,7 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
 
         const { name, serverType, buildCommand, startCommand, envVars, port, internalPort,
                 useCompose, composeFile, composeService, notificationWebhookUrl, autoRestart,
+                zeroDowntime,
                 previewsEnabled, previewBaseDomain, previewEnvOverrides, previewTtlDays } = req.body;
         if (name) project.name = name;
         if (serverType) project.serverType = serverType as ServerType;
@@ -243,6 +244,7 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
             }
         }
         if (autoRestart !== undefined) project.autoRestart = Boolean(autoRestart);
+        if (zeroDowntime !== undefined) project.zeroDowntime = Boolean(zeroDowntime);
 
         if (previewBaseDomain !== undefined) {
             if (previewBaseDomain === null || previewBaseDomain === '') {
