@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 
 // Absolute path to the .env file, resolved once so it can be both loaded
@@ -65,6 +66,39 @@ export const config = {
         userPrefix: process.env.SANDBOX_USER_PREFIX || 'runnable-',
     },
 };
+
+// Environment variables that belong to Runnable itself — its configuration and
+// secrets. These must NEVER be inherited by the user build/compose subprocesses
+// SandboxService spawns: they include secrets (JWT/DB/OAuth), and PORT in
+// particular collides with the API's own listen port when a user compose file
+// interpolates `${PORT}` (the deploy then tries to bind the API's port and
+// fails with "address already in use"). The user's own env reaches their
+// container through a separate channel (project env vars → `.runnable.env` /
+// docker `-e`), never by leaking ours. See SandboxService.childEnv.
+const STATIC_RUNNABLE_ENV_KEYS = [
+    'PORT', 'ENV_FILE',
+    'ADMIN_EMAIL', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'ADMIN_PASSWORD_RESET',
+    'DATABASE_HOST', 'DATABASE_PORT', 'DATABASE_NAME', 'DATABASE_USER', 'DATABASE_PASSWORD',
+    'JWT_SECRET', 'JWT_REFRESH_SECRET',
+    'SERV_DIR', 'BASE_DOMAIN', 'API_BASE_URL', 'MAX_UPLOAD_SIZE_MB', 'CLIENT_URL',
+    'GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GITHUB_CALLBACK_URL',
+    'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL',
+    'CADDY_CONFIG_DIR', 'CADDY_ADMIN_API',
+    'SANDBOX_ENABLED', 'SANDBOX_USER_PREFIX',
+];
+
+// Also strip every key actually present in our .env file — that catches any
+// operator-added secret/config we don't know about statically. Best-effort:
+// a missing/unreadable file just means the static list applies.
+function readEnvFileKeys(): string[] {
+    try {
+        return Object.keys(dotenv.parse(fs.readFileSync(envPath)));
+    } catch {
+        return [];
+    }
+}
+
+export const RUNNABLE_OWNED_ENV_KEYS = new Set<string>([...STATIC_RUNNABLE_ENV_KEYS, ...readEnvFileKeys()]);
 
 // --- Production safety checks ---
 if (config.nodeEnv === 'production') {

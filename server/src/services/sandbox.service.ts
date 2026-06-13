@@ -3,7 +3,7 @@ import fsSync from 'fs';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
-import { config } from '../config';
+import { config, RUNNABLE_OWNED_ENV_KEYS } from '../config';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -24,7 +24,32 @@ const ALLOWED_COMMANDS = ['git', 'caddy', 'nginx', 'apache2', 'apachectl', 'syst
 // daemon access.
 const ROOT_COMMANDS = ['docker', 'railpack'];
 
+// Always preserved even if an operator put one of these in .env — the docker
+// CLI and shells need them to function. Runnable's own config/secrets never
+// appear here, so they are still stripped.
+const ALWAYS_KEEP = new Set([
+    'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR',
+    'DOCKER_HOST', 'DOCKER_CONFIG', 'DOCKER_CONTEXT', 'BUILDKIT_HOST', 'XDG_RUNTIME_DIR',
+]);
+
 export class SandboxService {
+    /**
+     * Build the environment for a spawned subprocess. Starts from the server's
+     * environment but strips Runnable's own config/secrets (RUNNABLE_OWNED_ENV_KEYS)
+     * so they never leak into user build/compose/run commands — most visibly,
+     * so the server's PORT can't hijack a `${PORT}` interpolation in a user
+     * compose file. The explicit `extra` (caller-provided env) is layered on top
+     * and always wins, so intentional values (e.g. a per-project PORT) survive.
+     */
+    private static childEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+        const base: NodeJS.ProcessEnv = {};
+        for (const [key, value] of Object.entries(process.env)) {
+            if (RUNNABLE_OWNED_ENV_KEYS.has(key) && !ALWAYS_KEEP.has(key)) continue;
+            base[key] = value;
+        }
+        return { ...base, ...extra };
+    }
+
     static async exec(projectId: string, command: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): Promise<ExecResult> {
         // Validate command against allowlist
         const baseCommand = path.basename(command);
@@ -33,7 +58,7 @@ export class SandboxService {
         }
 
         return new Promise((resolve) => {
-            const processEnv = { ...process.env, ...env };
+            const processEnv = SandboxService.childEnv(env);
             let child: ChildProcess;
 
             // Docker/railpack run as the server (root); everything else drops
@@ -86,7 +111,7 @@ export class SandboxService {
         const logStream = fsSync.createWriteStream(logPath, { flags: 'a' });
 
         return new Promise((resolve, reject) => {
-            const processEnv = { ...process.env, ...env };
+            const processEnv = SandboxService.childEnv(env);
             const envArgs = Object.entries(env || {}).map(([k, v]) => `${k}=${v}`);
             // Docker/railpack run as the server (root); everything else drops
             // to the unprivileged per-project sandbox user.
