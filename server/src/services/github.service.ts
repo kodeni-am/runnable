@@ -20,7 +20,7 @@ export class GithubService {
         // Only allow https GitHub URLs — anything else (including values starting
         // with "-") could be interpreted by git as an option or a local transport.
         if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+(\.git)?$/.test(repoUrl)) {
-            throw new Error('Invalid repository URL: must be an https://github.com/owner/repo URL');
+            throw new AppError('Invalid repository URL: must be an https://github.com/owner/repo URL', 400);
         }
 
         let cloneUrl = repoUrl;
@@ -37,8 +37,32 @@ export class GithubService {
         );
 
         if (result.exitCode !== 0) {
-            throw new Error(`Git clone failed: ${result.stderr}`);
+            // A clone failure is almost always the caller's input (wrong/private
+            // URL, missing branch, no access) — a 4xx the UI can show, not a
+            // server fault that surfaces as an opaque 500. Map git's stderr to an
+            // actionable AppError, and scrub any injected token first so it can
+            // never reach the response or logs verbatim.
+            throw GithubService.cloneError(result.stderr, branch, token);
         }
+    }
+
+    /** Translate `git clone` stderr into an actionable, token-free AppError. */
+    private static cloneError(stderr: string, branch: string, token?: string): AppError {
+        let safe = (stderr || '').trim();
+        if (token) safe = safe.split(token).join('***');
+        // git also embeds the token in the remote URL it echoes back.
+        safe = safe.replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@');
+
+        if (/Remote branch .* not found|Could not find remote branch/i.test(safe)) {
+            return new AppError(`Branch "${branch}" was not found in the repository.`, 422);
+        }
+        if (/Repository not found|could not read Username|Authentication failed|terminal prompts disabled|HTTP Basic: Access denied/i.test(safe)) {
+            return new AppError(
+                'Repository not found or not accessible. Check the URL, and that your connected GitHub account has access to it (private repos need a GitHub connection).',
+                422,
+            );
+        }
+        return new AppError(`Could not clone repository: ${safe}`, 422);
     }
 
     static async pullLatest(projectId: string, dir: string, branch: string = 'main'): Promise<void> {
