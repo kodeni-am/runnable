@@ -694,9 +694,15 @@ body {
 
 .deploy-card-log {
   margin-top: 4px;
-  max-height: 360px;
-  overflow: hidden;
   border-radius: 8px;
+}
+
+/* Bound the scrollable body inside the card — NOT the whole console with
+   overflow:hidden, which clipped the header (search/filter/live) and let the
+   auto-follow scroll escape to the page. The header/toolbar/meta now always
+   sit above an internally-scrolling body. */
+.deploy-card-log .lc-body {
+  max-height: 300px;
 }
 
 /* ============ PROJECT DETAIL ============ */

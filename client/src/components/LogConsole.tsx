@@ -97,7 +97,7 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
     const [follow, setFollow] = useState(true);
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
     const [fetchError, setFetchError] = useState(false);
-    const endRef = useRef<HTMLDivElement>(null);
+    const bodyRef = useRef<HTMLDivElement>(null);
     const seqRef = useRef(0);
 
     const load = useCallback(async () => {
@@ -158,7 +158,12 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
     }, [parsed, query, regex, off, issuesOnly]);
 
     useEffect(() => {
-        if (follow) endRef.current?.scrollIntoView({ behavior: 'smooth' });
+        // Scroll the log body itself, never via scrollIntoView — that walks up
+        // and scrolls the page/card too, dragging the header (search/filter/live)
+        // out of view on every new line.
+        if (follow && bodyRef.current) {
+            bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+        }
     }, [filtered, follow]);
 
     const toggleLevel = (l: Level) =>
@@ -265,7 +270,7 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
                 </div>
             )}
 
-            <div className={`lc-body ${wrap ? '' : 'lc-body--nowrap'}`}>
+            <div ref={bodyRef} className={`lc-body ${wrap ? '' : 'lc-body--nowrap'}`}>
                 {shown.length === 0 ? (
                     <div className="lc-empty">{loading ? 'Loading…' : 'No matching log lines.'}</div>
                 ) : shown.map(({ p, i }) => {
@@ -305,7 +310,6 @@ export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey 
                         </div>
                     );
                 })}
-                <div ref={endRef} />
             </div>
         </div>
     );
