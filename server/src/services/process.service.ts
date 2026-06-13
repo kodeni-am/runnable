@@ -11,6 +11,7 @@ import { ComposePolicyService } from './composePolicy.service';
 import { BuildCacheService } from './buildCache.service';
 import { parse as parseYaml } from 'yaml';
 import { assessParallelSafety } from './composeSafety';
+import { resolveComposePort } from './composePort';
 import { probeHttp } from './httpProbe';
 import {
     containerGenerations, nextContainerGeneration,
@@ -150,7 +151,10 @@ export class ProcessService {
                     );
                     await ProcessService.sweepComposeGenerations(project, [composeName]);
 
-                    actualPort = await ProcessService.composeUpAndWaitForPort(project, composeName, buildLogPath, composeFile);
+                    // Start reuses the project's existing port (stable across restarts);
+                    // a project with none yet gets a fresh free one.
+                    const injectPort = await resolveComposePort(userEnv, project.port, { reuse: true });
+                    actualPort = await ProcessService.composeUpAndWaitForPort(project, composeName, buildLogPath, composeFile, [], injectPort);
                     // Store the compose project name in containerId so stop/logs can reference it
                     project.containerId = composeName;
                     project.port = actualPort;
@@ -329,8 +333,18 @@ export class ProcessService {
         buildLogPath: string,
         composeFile: string,
         extraUpArgs: string[] = [],
+        injectPort?: number,
     ): Promise<number> {
         const composeBase = ProcessService.composeBaseArgs(project, composeName, composeFile);
+
+        // Supply `PORT` to the compose file's `${PORT}` interpolation. Passed via
+        // the subprocess env (which wins over --env-file), and to the discovery
+        // calls too so they interpolate identically. Undefined when the user
+        // pinned their own PORT — then their .runnable.env value is used as-is.
+        const composeEnv = injectPort !== undefined ? { PORT: String(injectPort) } : undefined;
+        if (injectPort !== undefined) {
+            await fs.appendFile(buildLogPath, `Assigned host port ${injectPort} for $\{PORT}\n`);
+        }
 
         await fs.appendFile(buildLogPath, '\n--- Docker Compose Up (streaming) ---\n');
         const composeExitCode = await SandboxService.spawn(
@@ -338,6 +352,7 @@ export class ProcessService {
             [...composeBase, 'up', '--build', '-d', ...extraUpArgs],
             buildLogPath,
             project.directoryPath,
+            composeEnv,
         );
 
         if (composeExitCode !== 0) {
@@ -356,6 +371,7 @@ export class ProcessService {
                 project.id, 'docker',
                 [...composeBase, 'port', composeService, String(internalPort)],
                 project.directoryPath,
+                composeEnv,
             );
             await fs.appendFile(buildLogPath,
                 `[Port wait] attempt ${attempt + 1}: ${portResult.stdout.trim() || portResult.stderr.trim()}\n`);
@@ -372,6 +388,7 @@ export class ProcessService {
                 project.id, 'docker',
                 [...composeBase, 'ps'],
                 project.directoryPath,
+                composeEnv,
             );
             await fs.appendFile(buildLogPath, `--- Compose PS ---\n${psResult.stdout}\n`);
             throw new Error(
@@ -743,15 +760,19 @@ export class ProcessService {
 
             if (safety.safeToParallel) {
                 await fs.appendFile(buildLogPath, `Zero-downtime: blue-green (stack is safe to run twice)\n`);
+                // Parallel stack: needs a fresh port distinct from the still-running old one.
+                const injectPort = await resolveComposePort(userEnv, project.port, { reuse: false });
                 const healthGate = await ProcessService.deployComposeBlueGreen(
-                    project, projectRepo, buildLogPath, composeFile);
+                    project, projectRepo, buildLogPath, composeFile, injectPort);
                 return await ProcessService.finishDeploy(project, projectRepo, { strategy, healthGate });
             }
 
             strategy = 'compose-inplace';
             strategyReason = safety.reasons.join('; ');
             await fs.appendFile(buildLogPath, `Zero-downtime: in-place update (${strategyReason})\n`);
-            await ProcessService.deployComposeInPlace(project, projectRepo, buildLogPath, composeFile);
+            // In-place keeps the same project name and port — reuse it so the proxy stays put.
+            const injectPort = await resolveComposePort(userEnv, project.port, { reuse: true });
+            await ProcessService.deployComposeInPlace(project, projectRepo, buildLogPath, composeFile, injectPort);
             return await ProcessService.finishDeploy(project, projectRepo,
                 { strategy, healthGate: 'passed', strategyReason });
         } catch (err: any) {
@@ -874,6 +895,7 @@ export class ProcessService {
         projectRepo: ReturnType<typeof AppDataSource.getRepository<Project>>,
         buildLogPath: string,
         composeFile: string,
+        injectPort?: number,
     ): Promise<HealthGateResult> {
         const base = `runnable-${project.id.substring(0, 8)}`;
         const oldName = project.containerId!;
@@ -886,7 +908,7 @@ export class ProcessService {
         try {
             ProcessService.emitDeployProgress(project.id, 'building', 'blue-green');
             const hostPort = await ProcessService.composeUpAndWaitForPort(
-                project, incoming, buildLogPath, composeFile);
+                project, incoming, buildLogPath, composeFile, [], injectPort);
 
             healthGate = await ProcessService.healthGate(
                 project, hostPort,
@@ -926,13 +948,14 @@ export class ProcessService {
         projectRepo: ReturnType<typeof AppDataSource.getRepository<Project>>,
         buildLogPath: string,
         composeFile: string,
+        injectPort?: number,
     ): Promise<void> {
         const composeName = project.containerId!;
         const oldPort = project.port!;
 
         ProcessService.emitDeployProgress(project.id, 'updating-services', 'compose-inplace');
         const hostPort = await ProcessService.composeUpAndWaitForPort(
-            project, composeName, buildLogPath, composeFile, ['--remove-orphans']);
+            project, composeName, buildLogPath, composeFile, ['--remove-orphans'], injectPort);
 
         if (hostPort !== oldPort) {
             ProcessService.emitDeployProgress(project.id, 'switching', 'compose-inplace');
