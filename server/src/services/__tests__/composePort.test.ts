@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import net from 'net';
-import { getFreeHostPort, resolveComposePort } from '../composePort';
+import { getFreeHostPort, resolveComposePort, isHostPortFree } from '../composePort';
 
 describe('getFreeHostPort', () => {
     it('returns a port in the valid range that is actually bindable', async () => {
@@ -42,5 +42,56 @@ describe('resolveComposePort', () => {
         const p = await resolveComposePort({}, null, { reuse: true });
         expect(typeof p).toBe('number');
         expect(p).toBeGreaterThan(0);
+    });
+
+    it('reuses a stored port that is still free when verifyFree is on', async () => {
+        const free = await getFreeHostPort();
+        expect(await resolveComposePort({}, free, { reuse: true, verifyFree: true })).toBe(free);
+    });
+
+    it('falls back to a fresh port when the stored port is taken (verifyFree)', async () => {
+        // Occupy a port, then ask to reuse it with verification on.
+        const taken = await getFreeHostPort();
+        await new Promise<void>((resolve, reject) => {
+            const srv = net.createServer();
+            srv.once('error', reject);
+            srv.listen(taken, '0.0.0.0', async () => {
+                try {
+                    const p = await resolveComposePort({}, taken, { reuse: true, verifyFree: true });
+                    expect(p).not.toBe(taken);
+                    expect(typeof p).toBe('number');
+                    srv.close(() => resolve());
+                } catch (e) { srv.close(() => reject(e)); }
+            });
+        });
+    });
+
+    it('reuses a taken port WITHOUT verifyFree (in-place owns its own stack)', async () => {
+        const taken = await getFreeHostPort();
+        await new Promise<void>((resolve, reject) => {
+            const srv = net.createServer();
+            srv.once('error', reject);
+            srv.listen(taken, '0.0.0.0', async () => {
+                try {
+                    expect(await resolveComposePort({}, taken, { reuse: true })).toBe(taken);
+                    srv.close(() => resolve());
+                } catch (e) { srv.close(() => reject(e)); }
+            });
+        });
+    });
+});
+
+describe('isHostPortFree', () => {
+    it('returns false for an occupied port and true for a free one', async () => {
+        const port = await getFreeHostPort();
+        expect(await isHostPortFree(port)).toBe(true);
+        await new Promise<void>((resolve, reject) => {
+            const srv = net.createServer();
+            srv.once('error', reject);
+            srv.listen(port, '0.0.0.0', async () => {
+                expect(await isHostPortFree(port)).toBe(false);
+                srv.close(() => resolve());
+            });
+        });
     });
 });

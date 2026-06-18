@@ -151,9 +151,12 @@ export class ProcessService {
                     );
                     await ProcessService.sweepComposeGenerations(project, [composeName]);
 
-                    // Start reuses the project's existing port (stable across restarts);
-                    // a project with none yet gets a fresh free one.
-                    const injectPort = await resolveComposePort(userEnv, project.port, { reuse: true });
+                    // Start reuses the project's existing port (stable across restarts)
+                    // only if it's actually free — the creation-time port isn't unique
+                    // across compose projects, so a colliding one falls back to a fresh
+                    // free port. (The stack was just brought down, so a port that's truly
+                    // ours reads as free here.)
+                    const injectPort = await resolveComposePort(userEnv, project.port, { reuse: true, verifyFree: true });
                     actualPort = await ProcessService.composeUpAndWaitForPort(project, composeName, buildLogPath, composeFile, [], injectPort);
                     // Store the compose project name in containerId so stop/logs can reference it
                     project.containerId = composeName;
