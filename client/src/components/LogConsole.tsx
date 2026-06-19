@@ -83,12 +83,14 @@ export interface LogConsoleProps {
     leftAccessory?: ReactNode;
     /** Re-fetch trigger key — changing it refetches (e.g. selected container). */
     sourceKey?: string;
+    /** Whether Live (auto-refresh) tailing starts enabled. Defaults to true. */
+    defaultLive?: boolean;
 }
 
-export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey }: LogConsoleProps) {
+export default function LogConsole({ title, fetchLogs, leftAccessory, sourceKey, defaultLive = true }: LogConsoleProps) {
     const [lines, setLines] = useState<string[]>([]);
     const [loading, setLoading] = useState(false);
-    const [live, setLive] = useState(false);
+    const [live, setLive] = useState(defaultLive);
     const [query, setQuery] = useState('');
     const [regex, setRegex] = useState(false);
     const [off, setOff] = useState<Set<Level>>(new Set());
