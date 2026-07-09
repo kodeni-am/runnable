@@ -1135,12 +1135,16 @@ export class ProcessService {
     }
 
     /**
-     * Like redeploy(), but never coalesced. Used for rollbacks, where dropping
-     * the request would leave the project on the wrong commit.
+     * Like redeploy(), but never coalesced. Used for rollbacks and manual
+     * syncs, where dropping the request would leave the project on the wrong
+     * commit or silently do nothing. `prepare` may return `false` to mean
+     * "nothing to do" — the deploy is then skipped and { ran: false } is
+     * returned. Only an explicit `false` skips; a void-returning `prepare`
+     * deploys as before.
      */
-    static redeployExclusive(projectId: string, prepare: () => Promise<void>): Promise<RedeployResult> {
+    static redeployExclusive(projectId: string, prepare: () => Promise<void | boolean>): Promise<RedeployResult> {
         return ProcessService.withProjectLock(projectId, async () => {
-            await prepare();
+            if (await prepare() === false) return { ran: false };
             const result = await ProcessService.deployOrRecreate(projectId);
             return { ran: true, ...result };
         });
