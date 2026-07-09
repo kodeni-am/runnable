@@ -10,7 +10,7 @@ import {
 import { Project } from './Project';
 
 export type DeploymentStatus = 'success' | 'failed';
-export type DeploymentTrigger = 'webhook' | 'rollback';
+export type DeploymentTrigger = 'webhook' | 'rollback' | 'manual';
 export type DeployStrategyValue = 'blue-green' | 'compose-inplace' | 'recreate';
 export type HealthGateValue = 'passed' | 'degraded';
 

@@ -33,6 +33,15 @@ interface DeployFailureOpts {
     commitMessage?: string;
 }
 
+export interface SyncResult {
+    /** True when a build actually ran. */
+    deployed: boolean;
+    /** True when nothing was deployed because the tip was already serving. */
+    upToDate: boolean;
+    commitSha?: string;
+    deployment?: Deployment;
+}
+
 export class GithubService {
     static async cloneRepo(
         projectId: string,
@@ -429,6 +438,130 @@ export class GithubService {
                 branch: project.githubRepo.branch,
                 commitSha,
                 commitMessage: target.commitMessage,
+            }, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Manual counterpart to handlePushEvent, for when a webhook delivery never
+     * arrived. Fetches the tracked branch and redeploys its tip. Takes no
+     * commit argument — there is no payload to trust, so the deployed commit is
+     * whatever the fetch resolves.
+     *
+     * Skips the build when the tip is already checked out AND the project is
+     * running. A project sitting at the tip in any other state (ERROR, STOPPED,
+     * or a DEPLOYING left stale by a crash) is redeployed: that is the case
+     * this button exists for.
+     */
+    static async syncLatest(projectId: string): Promise<SyncResult> {
+        const projectRepo = AppDataSource.getRepository(Project);
+        const project = await projectRepo.findOne({
+            where: { id: projectId },
+            relations: ['githubRepo'],
+        });
+        if (!project) throw new AppError('Project not found', 404);
+        if (!project.githubRepo) throw new AppError('No GitHub repo connected to this project', 400);
+
+        const githubRepo = project.githubRepo;
+        const branch = githubRepo.branch;
+        const dir = project.directoryPath;
+
+        const deployed: { sha?: string; message?: string } = {};
+        let upToDate = false;
+        // Guards the catch block: a failure before we touch the working tree
+        // (e.g. a fetch that can't authenticate) must not mark a healthy
+        // project ERROR or record a deployment that never started.
+        let started = false;
+
+        try {
+            const result = await ProcessService.redeployExclusive(projectId, async () => {
+                const fetchResult = await SandboxService.exec(
+                    projectId, 'git',
+                    ['fetch', '--depth', '1', 'origin', branch],
+                    dir,
+                );
+                if (fetchResult.exitCode !== 0) {
+                    throw new Error(`Git fetch failed: ${fetchResult.stderr}`);
+                }
+
+                const local = await SandboxService.exec(projectId, 'git', ['rev-parse', 'HEAD'], dir);
+                const remote = await SandboxService.exec(projectId, 'git', ['rev-parse', 'FETCH_HEAD'], dir);
+                const localSha = local.stdout.trim();
+                const remoteSha = remote.stdout.trim();
+
+                if (localSha && localSha === remoteSha && project.status === ServiceStatus.RUNNING) {
+                    upToDate = true;
+                    deployed.sha = localSha;
+                    return false;
+                }
+
+                const resetResult = await SandboxService.exec(
+                    projectId, 'git',
+                    ['reset', '--hard', 'FETCH_HEAD'],
+                    dir,
+                );
+                if (resetResult.exitCode !== 0) {
+                    throw new Error(`Git reset failed: ${resetResult.stderr}`);
+                }
+
+                started = true;
+                await projectRepo.update(projectId, { status: ServiceStatus.DEPLOYING });
+                ProcessService.emitStatus(projectId, ServiceStatus.DEPLOYING);
+
+                const head = await SandboxService.exec(
+                    projectId, 'git',
+                    ['log', '-1', '--pretty=%H%n%s'],
+                    dir,
+                );
+                if (head.exitCode === 0) {
+                    const [sha, message] = head.stdout.trim().split('\n');
+                    if (sha) {
+                        deployed.sha = sha;
+                        deployed.message = message;
+                    }
+                }
+
+                githubRepo.lastDeployAt = new Date();
+                await AppDataSource.getRepository(GithubRepo).save(githubRepo);
+                return true;
+            });
+
+            if (!result.ran) {
+                return { deployed: false, upToDate, commitSha: deployed.sha };
+            }
+
+            const deployment = await GithubService.recordDeployment(projectId, {
+                status: 'success',
+                trigger: 'manual',
+                branch,
+                commitSha: deployed.sha,
+                commitMessage: deployed.message,
+                strategy: result.strategy,
+                durationMs: result.durationMs,
+                healthGate: result.healthGate,
+                strategyReason: result.strategyReason,
+            });
+            await NotificationService.notify(project, {
+                event: 'deploy.success',
+                title: `${project.name} deployed`,
+                message: deployed.message || 'Deployed latest commit',
+                success: true,
+                meta: { branch, commit: deployed.sha?.slice(0, 7) },
+            });
+            return { deployed: true, upToDate: false, commitSha: deployed.sha, deployment };
+        } catch (error: any) {
+            // A failure before the working tree was touched (e.g. a fetch that
+            // can't authenticate) must not mark a healthy project ERROR or
+            // record a deployment that never started.
+            if (!started) throw error;
+
+            await GithubService.recordDeployFailure(project, {
+                kind: 'deploy',
+                trigger: 'manual',
+                branch,
+                commitSha: deployed.sha,
+                commitMessage: deployed.message,
             }, error);
             throw error;
         }
