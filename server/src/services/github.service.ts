@@ -9,6 +9,30 @@ import { NotificationService } from './notification.service';
 import { AppError } from '../middleware/errorHandler';
 import { config } from '../config';
 
+/** Notification wording for a failed deploy, by kind. */
+const FAILURE_COPY = {
+    deploy: {
+        event: 'deploy.failed',
+        title: (name: string) => `${name} deploy failed`,
+        fallback: 'Deployment failed',
+        keptServing: 'previous version kept serving, visitors saw nothing.',
+    },
+    rollback: {
+        event: 'rollback.failed',
+        title: (name: string) => `${name} rollback failed`,
+        fallback: 'Rollback failed',
+        keptServing: 'current version kept serving, visitors saw nothing.',
+    },
+} as const;
+
+interface DeployFailureOpts {
+    kind: keyof typeof FAILURE_COPY;
+    trigger: DeploymentTrigger;
+    branch: string;
+    commitSha?: string;
+    commitMessage?: string;
+}
+
 export class GithubService {
     static async cloneRepo(
         projectId: string,
@@ -253,35 +277,13 @@ export class GithubService {
                 });
             }
         } catch (error: any) {
-            // A failed zero-downtime deploy leaves the OLD version serving —
-            // status must say RUNNING, not ERROR, or the UI lies and the
-            // health monitor "fixes" a healthy site. Update only the status —
-            // the deploy may have persisted fresh containerId/port values
-            // that this stale entity must not overwrite.
-            const stillServing = error instanceof DeployError && error.stillServing;
-            await projectRepo.update(projectId, {
-                status: stillServing ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
-            });
-            if (stillServing) ProcessService.emitStatus(projectId, ServiceStatus.RUNNING);
-            await GithubService.recordDeployment(projectId, {
-                status: 'failed',
+            await GithubService.recordDeployFailure(project, {
+                kind: 'deploy',
                 trigger: 'webhook',
                 branch: githubRepo.branch,
                 commitSha: deployed.sha,
                 commitMessage: deployed.message,
-                error: error?.message,
-                stillServing,
-                strategy: error instanceof DeployError ? error.strategy : undefined,
-            }).catch(() => { });
-            await NotificationService.notify(project, {
-                event: 'deploy.failed',
-                title: `${project.name} deploy failed`,
-                message: stillServing
-                    ? `${error?.message || 'Deployment failed'} — previous version kept serving, visitors saw nothing.`
-                    : error?.message || 'Deployment failed',
-                success: false,
-                meta: { branch: githubRepo.branch, commit: deployed.sha?.slice(0, 7) },
-            });
+            }, error);
             throw error;
         }
     }
@@ -302,6 +304,52 @@ export class GithubService {
         const deployRepo = AppDataSource.getRepository(Deployment);
         const deployment = deployRepo.create({ projectId, ...data });
         return deployRepo.save(deployment);
+    }
+
+    /**
+     * The shared failure path for every deploy trigger. A failed zero-downtime
+     * deploy leaves the OLD version serving — status must then say RUNNING, not
+     * ERROR, or the UI lies and the health monitor "fixes" a healthy site.
+     * Updates only the status: the deploy may have persisted fresh
+     * containerId/port values that a stale entity must not overwrite.
+     *
+     * Returns whether the previous version kept serving.
+     */
+    private static async recordDeployFailure(
+        project: Project,
+        opts: DeployFailureOpts,
+        error: any,
+    ): Promise<boolean> {
+        const copy = FAILURE_COPY[opts.kind];
+        const stillServing = error instanceof DeployError && error.stillServing;
+
+        await AppDataSource.getRepository(Project).update(project.id, {
+            status: stillServing ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
+        });
+        if (stillServing) ProcessService.emitStatus(project.id, ServiceStatus.RUNNING);
+
+        await GithubService.recordDeployment(project.id, {
+            status: 'failed',
+            trigger: opts.trigger,
+            branch: opts.branch,
+            commitSha: opts.commitSha,
+            commitMessage: opts.commitMessage,
+            error: error?.message,
+            stillServing,
+            strategy: error instanceof DeployError ? error.strategy : undefined,
+        }).catch(() => { });
+
+        await NotificationService.notify(project, {
+            event: copy.event,
+            title: copy.title(project.name),
+            message: stillServing
+                ? `${error?.message || copy.fallback} — ${copy.keptServing}`
+                : error?.message || copy.fallback,
+            success: false,
+            meta: { branch: opts.branch, commit: opts.commitSha?.slice(0, 7) },
+        });
+
+        return stillServing;
     }
 
     /**
@@ -375,34 +423,13 @@ export class GithubService {
             });
             return recorded;
         } catch (error: any) {
-            // Same contract as handlePushEvent: a failed zero-downtime
-            // rollback leaves the previous version serving → RUNNING. Update
-            // only the status — the deploy may have persisted fresh
-            // containerId/port values that this stale entity must not overwrite.
-            const stillServing = error instanceof DeployError && error.stillServing;
-            await projectRepo.update(projectId, {
-                status: stillServing ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
-            });
-            if (stillServing) ProcessService.emitStatus(projectId, ServiceStatus.RUNNING);
-            await GithubService.recordDeployment(projectId, {
-                status: 'failed',
+            await GithubService.recordDeployFailure(project, {
+                kind: 'rollback',
                 trigger: 'rollback',
                 branch: project.githubRepo.branch,
                 commitSha,
                 commitMessage: target.commitMessage,
-                error: error?.message,
-                stillServing,
-                strategy: error instanceof DeployError ? error.strategy : undefined,
-            }).catch(() => { });
-            await NotificationService.notify(project, {
-                event: 'rollback.failed',
-                title: `${project.name} rollback failed`,
-                message: stillServing
-                    ? `${error?.message || 'Rollback failed'} — current version kept serving, visitors saw nothing.`
-                    : error?.message || 'Rollback failed',
-                success: false,
-                meta: { branch: project.githubRepo.branch, commit: commitSha.slice(0, 7) },
-            });
+            }, error);
             throw error;
         }
     }
