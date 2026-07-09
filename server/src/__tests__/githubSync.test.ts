@@ -135,4 +135,28 @@ describe('GithubService.syncLatest', () => {
         await expect(GithubService.syncLatest('proj-1')).rejects.toThrow(/No GitHub repo connected/);
         expect(ProcessService.redeployExclusive).not.toHaveBeenCalled();
     });
+
+    it('delegates a failure after the reset to recordDeployFailure and rethrows', async () => {
+        stubProject(ServiceStatus.RUNNING);
+        stubGit(LOCAL_SHA, REMOTE_SHA);
+        // Simulate a deploy that fails *after* `prepare` has already reset the
+        // working tree and returned `true` — unlike the fetch-failure test above,
+        // `started` is true here, so syncLatest must delegate to
+        // recordDeployFailure rather than rethrowing untouched.
+        vi.mocked(ProcessService.redeployExclusive).mockImplementation(async (_id: any, prepare: any) => {
+            await prepare();
+            throw new Error('build failed');
+        });
+
+        await expect(GithubService.syncLatest('proj-1')).rejects.toThrow(/build failed/);
+
+        // recordDeployFailure's observable effects: project marked ERROR (a
+        // plain Error is not a DeployError, so nothing "kept serving"), and a
+        // failed Deployment row recorded with the manual trigger.
+        expect(projectRepo.update).toHaveBeenCalledWith('proj-1', { status: ServiceStatus.ERROR });
+        expect(deployRepo.create).toHaveBeenCalledWith(
+            expect.objectContaining({ trigger: 'manual', status: 'failed', branch: 'main', error: 'build failed' }),
+        );
+        expect(deployRepo.save).toHaveBeenCalled();
+    });
 });

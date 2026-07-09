@@ -490,7 +490,20 @@ export class GithubService {
                 const localSha = local.stdout.trim();
                 const remoteSha = remote.stdout.trim();
 
-                if (localSha && localSha === remoteSha && project.status === ServiceStatus.RUNNING) {
+                // `project` was loaded before redeployExclusive acquired this
+                // project's lock, so its in-memory `status` can be stale by the
+                // time we get here: a concurrent deploy may have just finished
+                // (e.g. failed, leaving the project ERROR at this same tip)
+                // while we were waiting for the lock. Re-read the status fresh,
+                // inside the lock, immediately before the skip decision — the
+                // rest of `project` (directoryPath, name, etc.) is unaffected by
+                // a concurrent deploy and is safe to keep using as loaded.
+                const freshProject = await projectRepo.findOne({
+                    where: { id: projectId },
+                    select: ['status'],
+                });
+
+                if (localSha && localSha === remoteSha && freshProject?.status === ServiceStatus.RUNNING) {
                     upToDate = true;
                     deployed.sha = localSha;
                     return false;
@@ -520,6 +533,14 @@ export class GithubService {
                         deployed.sha = sha;
                         deployed.message = message;
                     }
+                }
+                // `git log` failing (or yielding no SHA) must not leave the
+                // recorded Deployment / success notification with an undefined
+                // commit — `remoteSha` is exactly what was just checked out by
+                // the `reset --hard FETCH_HEAD` above. The commit message may
+                // legitimately stay undefined.
+                if (!deployed.sha) {
+                    deployed.sha = remoteSha;
                 }
 
                 githubRepo.lastDeployAt = new Date();
