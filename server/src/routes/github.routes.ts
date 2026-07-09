@@ -116,6 +116,18 @@ router.delete('/:id/github/disconnect', requireProjectAccess(ProjectPermission.C
     }
 });
 
+// Manually fetch the tracked branch and deploy its tip. The escape hatch for a
+// webhook that never arrived. Lifecycle op → canStart, same as rollback.
+router.post('/:id/github/sync', requireProjectAccess(ProjectPermission.CAN_START), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const result = await GithubService.syncLatest(project.id);
+        res.json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
 // List deployment history (newest first)
 router.get('/:id/deployments', requireProjectAccess(ProjectPermission.CAN_VIEW_GITHUB), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
