@@ -13,7 +13,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useProjectSocket } from '../hooks/useProjectSocket';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
-    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus
+    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus, RefreshCw
 } from 'lucide-react';
 
 const DEFAULT_COLLAB_PERMS: ProjectPermissions = {
@@ -61,6 +61,8 @@ export default function ProjectDetail() {
     const [deploymentsLoading, setDeploymentsLoading] = useState(false);
     const [rollbackLoading, setRollbackLoading] = useState('');
     const [deploymentsError, setDeploymentsError] = useState('');
+    const [syncing, setSyncing] = useState(false);
+    const [syncMessage, setSyncMessage] = useState('');
 
     // Preview environments state
     const [previews, setPreviews] = useState<Project[]>([]);
@@ -206,6 +208,24 @@ export default function ProjectDetail() {
             loadDeployments();
         }
         setRollbackLoading('');
+    };
+
+    const handleGithubSync = async () => {
+        if (!id) return;
+        setSyncing(true);
+        setSyncMessage('');
+        try {
+            const { data } = await projectsApi.syncGithub(id);
+            setSyncMessage(
+                data.upToDate
+                    ? `Already up to date${data.commitSha ? ` — ${data.commitSha.slice(0, 7)}` : ''}`
+                    : `Deployed ${data.commitSha?.slice(0, 7) || 'latest commit'}`,
+            );
+            await Promise.all([loadDeployments(), fetchProject(id)]);
+        } catch (err: any) {
+            setSyncMessage(err.response?.data?.error || 'Sync failed');
+        }
+        setSyncing(false);
     };
 
     const handleDestroyPreview = async (previewId: string) => {
@@ -594,8 +614,18 @@ export default function ProjectDetail() {
                                             </div>
                                         )}
                                     </div>
-                                    {canEditConfig && <button className="btn btn-danger" onClick={handleGithubDisconnect}>Disconnect</button>}
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                                        {canStart && (
+                                            <button className="btn btn-secondary" onClick={handleGithubSync} disabled={syncing}>
+                                                {syncing ? <span className="spinner" /> : <RefreshCw size={16} />} Check for updates
+                                            </button>
+                                        )}
+                                        {canEditConfig && <button className="btn btn-danger" onClick={handleGithubDisconnect}>Disconnect</button>}
+                                    </div>
                                 </div>
+                                {syncMessage && (
+                                    <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 12 }}>{syncMessage}</div>
+                                )}
                             </div>
                         ) : (
                             <div className="empty-state">
@@ -680,6 +710,11 @@ export default function ProjectDetail() {
                                                 {d.trigger === 'rollback' && (
                                                     <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(255, 180, 100, 0.15)', color: '#ffb464' }}>
                                                         Rollback
+                                                    </span>
+                                                )}
+                                                {d.trigger === 'manual' && (
+                                                    <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'rgba(160, 160, 255, 0.15)', color: '#a0a0ff' }}>
+                                                        Manual
                                                     </span>
                                                 )}
                                                 {d.id === deployments.find(x => x.status === 'success')?.id && (

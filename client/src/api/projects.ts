@@ -105,7 +105,7 @@ export interface Deployment {
     commitMessage?: string | null;
     branch: string;
     status: 'success' | 'failed';
-    trigger: 'webhook' | 'rollback';
+    trigger: 'webhook' | 'rollback' | 'manual';
     error?: string | null;
     strategy?: 'blue-green' | 'compose-inplace' | 'recreate' | null;
     stillServing?: boolean | null;
@@ -113,6 +113,13 @@ export interface Deployment {
     healthGate?: 'passed' | 'degraded' | null;
     strategyReason?: string | null;
     createdAt: string;
+}
+
+export interface SyncResult {
+    deployed: boolean;
+    upToDate: boolean;
+    commitSha?: string;
+    deployment?: Deployment;
 }
 
 export const projectsApi = {
@@ -146,6 +153,7 @@ export const projectsApi = {
     connectGithub: (id: string, repoUrl: string, branch?: string) =>
         api.post(`/projects/${id}/github/connect`, { repoUrl, branch }),
     disconnectGithub: (id: string) => api.delete(`/projects/${id}/github/disconnect`),
+    syncGithub: (id: string) => api.post<SyncResult>(`/projects/${id}/github/sync`),
 
     // Deployments
     listDeployments: (id: string) => api.get<Deployment[]>(`/projects/${id}/deployments`),
