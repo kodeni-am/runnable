@@ -224,6 +224,8 @@ export default function ProjectDetail() {
             await Promise.all([loadDeployments(), fetchProject(id)]);
         } catch (err: any) {
             setSyncMessage(err.response?.data?.error || 'Sync failed');
+            loadDeployments();
+            fetchProject(id);
         }
         setSyncing(false);
     };
