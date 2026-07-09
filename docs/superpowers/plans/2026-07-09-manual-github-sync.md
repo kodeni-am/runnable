@@ -26,14 +26,22 @@
 |---|---|
 | `server/src/entities/Deployment.ts` | Modify: add `'manual'` to `DeploymentTrigger` |
 | `server/src/services/process.service.ts` | Modify: `redeployExclusive` accepts a `prepare` that returns `false` to skip the deploy |
-| `server/src/services/github.service.ts` | Modify: add `SyncResult` interface + `syncLatest()` |
+| `server/src/services/github.service.ts` | Modify: extract `recordDeployFailure()`; add `SyncResult` interface + `syncLatest()` |
 | `server/src/routes/github.routes.ts` | Modify: add `POST /:id/github/sync` |
 | `server/src/__tests__/redeployExclusive.test.ts` | Create: covers the `prepare` short-circuit contract |
-| `server/src/__tests__/githubSync.test.ts` | Create: covers `syncLatest`'s three logic branches |
+| `server/src/__tests__/deployFailure.test.ts` | Create: covers `recordDeployFailure`'s two kinds |
+| `server/src/__tests__/githubSync.test.ts` | Create: covers `syncLatest`'s logic branches |
 | `client/src/api/projects.ts` | Modify: `'manual'` trigger, `SyncResult` type, `syncGithub()` |
 | `client/src/pages/ProjectDetail.tsx` | Modify: "Check for updates" button + `Manual` history chip |
 
-Four tasks, each independently reviewable and testable: the lock primitive, the service, the route, the client.
+Six tasks, each independently reviewable and testable: the lock primitive, the failure-path extraction, the service, the route, the client, and end-to-end verification.
+
+## Amendment (2026-07-09)
+
+The spec's `syncLatest` failure path is a near-verbatim copy of the catch blocks
+in `handlePushEvent` and `rollbackToDeployment`. Rather than add a third copy,
+Task 2 extracts the shared behaviour into `GithubService.recordDeployFailure()`
+first, as a behaviour-preserving refactor, and Task 3's `syncLatest` calls it.
 
 ---
 
@@ -139,7 +147,280 @@ git commit -m "feat: let redeployExclusive's prepare skip the deploy by returnin
 
 ---
 
-### Task 2: `GithubService.syncLatest`
+### Task 2: Extract `GithubService.recordDeployFailure`
+
+A behaviour-preserving refactor, done before `syncLatest` exists so that the new
+code has one failure path to call rather than a third copy to write.
+
+`handlePushEvent` (`github.service.ts:255-286`) and `rollbackToDeployment`
+(`:377-407`) end with catch blocks that differ only in the notification copy and
+the recorded `trigger`. Both do the same four things: decide `stillServing`,
+update the project status (`RUNNING` when the old version survived, else
+`ERROR`), record a failed `Deployment`, and notify.
+
+Extract that into one private static. The two call sites' observable behaviour —
+status writes, deployment rows, notification payloads — must not change.
+
+**Files:**
+- Modify: `server/src/services/github.service.ts` (add `FAILURE_COPY` + `recordDeployFailure`; rewrite both catch blocks)
+- Test: `server/src/__tests__/deployFailure.test.ts` (create)
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces: `GithubService.recordDeployFailure(project: Project, opts: DeployFailureOpts, error: any): Promise<boolean>` — returns `stillServing`. Task 3 calls it.
+
+```ts
+interface DeployFailureOpts {
+    kind: 'deploy' | 'rollback';
+    trigger: DeploymentTrigger;
+    branch: string;
+    commitSha?: string;
+    commitMessage?: string;
+}
+```
+
+- [ ] **Step 1: Write the failing test**
+
+Create `server/src/__tests__/deployFailure.test.ts`:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../services/sandbox.service', () => ({ SandboxService: { exec: vi.fn() } }));
+vi.mock('../services/process.service', () => ({
+    ProcessService: { redeployExclusive: vi.fn(), redeploy: vi.fn(), emitStatus: vi.fn() },
+}));
+vi.mock('../services/notification.service', () => ({ NotificationService: { notify: vi.fn() } }));
+vi.mock('../config/data-source', () => ({ AppDataSource: { getRepository: vi.fn() } }));
+
+import { GithubService } from '../services/github.service';
+import { ProcessService } from '../services/process.service';
+import { NotificationService } from '../services/notification.service';
+import { AppDataSource } from '../config/data-source';
+import { DeployError } from '../services/deployError';
+import { Project, Deployment, ServiceStatus } from '../entities';
+
+const SHA = 'c'.repeat(40);
+const project = { id: 'proj-1', name: 'demo' } as any;
+
+let projectRepo: any;
+let deployRepo: any;
+
+beforeEach(() => {
+    vi.clearAllMocks();
+    projectRepo = { update: vi.fn(async () => undefined) };
+    deployRepo = { create: vi.fn((d: any) => d), save: vi.fn(async (d: any) => ({ id: 'dep-1', ...d })) };
+    vi.mocked(AppDataSource.getRepository).mockImplementation((entity: any) => {
+        if (entity === Project) return projectRepo;
+        if (entity === Deployment) return deployRepo;
+        throw new Error('unexpected repository');
+    });
+});
+
+const call = (opts: any, error: any) => (GithubService as any).recordDeployFailure(project, opts, error);
+
+describe('GithubService.recordDeployFailure', () => {
+    it('marks the project errored and records the failure when nothing is serving', async () => {
+        const stillServing = await call(
+            { kind: 'deploy', trigger: 'webhook', branch: 'main', commitSha: SHA },
+            new Error('build blew up'),
+        );
+
+        expect(stillServing).toBe(false);
+        expect(projectRepo.update).toHaveBeenCalledWith('proj-1', { status: ServiceStatus.ERROR });
+        expect(ProcessService.emitStatus).not.toHaveBeenCalled();
+        expect(deployRepo.create).toHaveBeenCalledWith(expect.objectContaining({
+            status: 'failed', trigger: 'webhook', branch: 'main', commitSha: SHA,
+            error: 'build blew up', stillServing: false,
+        }));
+        expect(NotificationService.notify).toHaveBeenCalledWith(project, expect.objectContaining({
+            event: 'deploy.failed', title: 'demo deploy failed', success: false,
+        }));
+    });
+
+    it('keeps the project running when the old version still serves', async () => {
+        const err = new DeployError('health gate failed', { stillServing: true, strategy: 'blue-green' } as any);
+        const stillServing = await call({ kind: 'deploy', trigger: 'manual', branch: 'main' }, err);
+
+        expect(stillServing).toBe(true);
+        expect(projectRepo.update).toHaveBeenCalledWith('proj-1', { status: ServiceStatus.RUNNING });
+        expect(ProcessService.emitStatus).toHaveBeenCalledWith('proj-1', ServiceStatus.RUNNING);
+        expect(deployRepo.create).toHaveBeenCalledWith(expect.objectContaining({
+            trigger: 'manual', stillServing: true, strategy: 'blue-green',
+        }));
+        expect(NotificationService.notify).toHaveBeenCalledWith(project, expect.objectContaining({
+            message: expect.stringContaining('previous version kept serving'),
+        }));
+    });
+
+    it('uses rollback copy for the rollback kind', async () => {
+        const err = new DeployError('rollback broke', { stillServing: true, strategy: 'recreate' } as any);
+        await call({ kind: 'rollback', trigger: 'rollback', branch: 'main', commitSha: SHA }, err);
+
+        expect(NotificationService.notify).toHaveBeenCalledWith(project, expect.objectContaining({
+            event: 'rollback.failed',
+            title: 'demo rollback failed',
+            message: expect.stringContaining('current version kept serving'),
+        }));
+    });
+
+    it('does not throw when recording the deployment row fails', async () => {
+        deployRepo.save = vi.fn(async () => { throw new Error('db down'); });
+
+        await expect(call({ kind: 'deploy', trigger: 'webhook', branch: 'main' }, new Error('x'))).resolves.toBe(false);
+    });
+});
+```
+
+**Before writing the test, confirm `DeployError`'s real constructor signature** by reading `server/src/services/deployError.ts`, and adjust the two `new DeployError(...)` calls to match it. The `as any` casts above are a placeholder for whatever that signature turns out to be — do not leave a call that does not typecheck.
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npm test --workspace=server -- deployFailure`
+Expected: FAIL — `recordDeployFailure is not a function`.
+
+- [ ] **Step 3: Write the implementation**
+
+In `server/src/services/github.service.ts`, add above `export class GithubService {`:
+
+```ts
+/** Notification wording for a failed deploy, by kind. */
+const FAILURE_COPY = {
+    deploy: {
+        event: 'deploy.failed',
+        title: (name: string) => `${name} deploy failed`,
+        fallback: 'Deployment failed',
+        keptServing: 'previous version kept serving, visitors saw nothing.',
+    },
+    rollback: {
+        event: 'rollback.failed',
+        title: (name: string) => `${name} rollback failed`,
+        fallback: 'Rollback failed',
+        keptServing: 'current version kept serving, visitors saw nothing.',
+    },
+} as const;
+
+interface DeployFailureOpts {
+    kind: keyof typeof FAILURE_COPY;
+    trigger: DeploymentTrigger;
+    branch: string;
+    commitSha?: string;
+    commitMessage?: string;
+}
+```
+
+`DeploymentTrigger` is already imported as a type at line 5. Add `recordDeployFailure` as a private static on `GithubService`:
+
+```ts
+    /**
+     * The shared failure path for every deploy trigger. A failed zero-downtime
+     * deploy leaves the OLD version serving — status must then say RUNNING, not
+     * ERROR, or the UI lies and the health monitor "fixes" a healthy site.
+     * Updates only the status: the deploy may have persisted fresh
+     * containerId/port values that a stale entity must not overwrite.
+     *
+     * Returns whether the previous version kept serving.
+     */
+    private static async recordDeployFailure(
+        project: Project,
+        opts: DeployFailureOpts,
+        error: any,
+    ): Promise<boolean> {
+        const copy = FAILURE_COPY[opts.kind];
+        const stillServing = error instanceof DeployError && error.stillServing;
+
+        await AppDataSource.getRepository(Project).update(project.id, {
+            status: stillServing ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
+        });
+        if (stillServing) ProcessService.emitStatus(project.id, ServiceStatus.RUNNING);
+
+        await GithubService.recordDeployment(project.id, {
+            status: 'failed',
+            trigger: opts.trigger,
+            branch: opts.branch,
+            commitSha: opts.commitSha,
+            commitMessage: opts.commitMessage,
+            error: error?.message,
+            stillServing,
+            strategy: error instanceof DeployError ? error.strategy : undefined,
+        }).catch(() => { });
+
+        await NotificationService.notify(project, {
+            event: copy.event,
+            title: copy.title(project.name),
+            message: stillServing
+                ? `${error?.message || copy.fallback} — ${copy.keptServing}`
+                : error?.message || copy.fallback,
+            success: false,
+            meta: { branch: opts.branch, commit: opts.commitSha?.slice(0, 7) },
+        });
+
+        return stillServing;
+    }
+```
+
+Then replace the catch block of `handlePushEvent` (currently lines 255-286) so its body is:
+
+```ts
+        } catch (error: any) {
+            await GithubService.recordDeployFailure(project, {
+                kind: 'deploy',
+                trigger: 'webhook',
+                branch: githubRepo.branch,
+                commitSha: deployed.sha,
+                commitMessage: deployed.message,
+            }, error);
+            throw error;
+        }
+```
+
+And the catch block of `rollbackToDeployment` (currently lines 377-407):
+
+```ts
+        } catch (error: any) {
+            await GithubService.recordDeployFailure(project, {
+                kind: 'rollback',
+                trigger: 'rollback',
+                branch: project.githubRepo.branch,
+                commitSha,
+                commitMessage: target.commitMessage,
+            }, error);
+            throw error;
+        }
+```
+
+If `NotificationService.notify`'s `event` parameter is a narrow string-literal
+union, `copy.event` (typed by `as const`) will satisfy it; if it does not
+typecheck, widen `FAILURE_COPY`'s `event` to that union type rather than to
+`string`.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npm test --workspace=server -- deployFailure`
+Expected: 4 passed.
+
+Run: `npm test --workspace=server && npm run build --workspace=server`
+Expected: all tests pass, build exits 0.
+
+- [ ] **Step 5: Verify no behaviour drift**
+
+Run: `git diff -U3 server/src/services/github.service.ts`
+
+Confirm by eye that the two rewritten catch blocks produce the same status
+writes, the same `Deployment` fields, and the same notification `event`/`title`/
+`message` strings as the code they replaced. This is a refactor: any difference
+is a bug.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add server/src/services/github.service.ts server/src/__tests__/deployFailure.test.ts
+git commit -m "refactor: extract GithubService.recordDeployFailure from the deploy and rollback paths"
+```
+
+---
+
+### Task 3: `GithubService.syncLatest`
 
 The core of the feature. Fetches the tracked branch under the project lock, decides whether anything needs deploying, and records/notifies exactly as the webhook path does.
 
@@ -154,7 +435,7 @@ Two behaviours that are easy to get wrong and that the tests pin down:
 - Test: `server/src/__tests__/githubSync.test.ts` (create)
 
 **Interfaces:**
-- Consumes: `ProcessService.redeployExclusive(projectId, prepare: () => Promise<void | boolean>)` from Task 1.
+- Consumes: `ProcessService.redeployExclusive(projectId, prepare: () => Promise<void | boolean>)` from Task 1; `GithubService.recordDeployFailure(project, opts, error)` from Task 2.
 - Produces:
   - `export type DeploymentTrigger = 'webhook' | 'rollback' | 'manual'`
   - `export interface SyncResult { deployed: boolean; upToDate: boolean; commitSha?: string; deployment?: Deployment }`
@@ -448,36 +729,18 @@ Then add `syncLatest` as the last method of the class, after `rollbackToDeployme
             });
             return { deployed: true, upToDate: false, commitSha: deployed.sha, deployment };
         } catch (error: any) {
+            // A failure before the working tree was touched (e.g. a fetch that
+            // can't authenticate) must not mark a healthy project ERROR or
+            // record a deployment that never started.
             if (!started) throw error;
 
-            // Same contract as handlePushEvent: a failed zero-downtime deploy
-            // leaves the OLD version serving, so the status must say RUNNING.
-            // Update only the status — the deploy may have persisted fresh
-            // containerId/port values that this stale entity must not overwrite.
-            const stillServing = error instanceof DeployError && error.stillServing;
-            await projectRepo.update(projectId, {
-                status: stillServing ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
-            });
-            if (stillServing) ProcessService.emitStatus(projectId, ServiceStatus.RUNNING);
-            await GithubService.recordDeployment(projectId, {
-                status: 'failed',
+            await GithubService.recordDeployFailure(project, {
+                kind: 'deploy',
                 trigger: 'manual',
                 branch,
                 commitSha: deployed.sha,
                 commitMessage: deployed.message,
-                error: error?.message,
-                stillServing,
-                strategy: error instanceof DeployError ? error.strategy : undefined,
-            }).catch(() => { });
-            await NotificationService.notify(project, {
-                event: 'deploy.failed',
-                title: `${project.name} deploy failed`,
-                message: stillServing
-                    ? `${error?.message || 'Deployment failed'} — previous version kept serving, visitors saw nothing.`
-                    : error?.message || 'Deployment failed',
-                success: false,
-                meta: { branch, commit: deployed.sha?.slice(0, 7) },
-            });
+            }, error);
             throw error;
         }
     }
@@ -503,13 +766,13 @@ git commit -m "feat: GithubService.syncLatest — manual fetch + redeploy of the
 
 ---
 
-### Task 3: `POST /:id/github/sync` route
+### Task 4: `POST /:id/github/sync` route
 
 **Files:**
 - Modify: `server/src/routes/github.routes.ts` (insert after the `disconnect` route, before the deployments routes at line 119)
 
 **Interfaces:**
-- Consumes: `GithubService.syncLatest(projectId: string): Promise<SyncResult>` from Task 2.
+- Consumes: `GithubService.syncLatest(projectId: string): Promise<SyncResult>` from Task 3.
 - Produces: `POST /api/projects/:id/github/sync` → `200 { deployed, upToDate, commitSha?, deployment? }`.
 
 - [ ] **Step 1: Add the route**
@@ -551,14 +814,14 @@ git commit -m "feat: POST /:id/github/sync route for manual GitHub sync"
 
 ---
 
-### Task 4: Client — button and history chip
+### Task 5: Client — button and history chip
 
 **Files:**
 - Modify: `client/src/api/projects.ts:108` (trigger union), `:116` (add `SyncResult`), `:148` (add `syncGithub`)
 - Modify: `client/src/pages/ProjectDetail.tsx` — imports (line 14), state (near line 62), handler (after `handleRollback`, line 209), GitHub tab UI (line 597), history chip (line 684)
 
 **Interfaces:**
-- Consumes: `POST /api/projects/:id/github/sync` from Task 3.
+- Consumes: `POST /api/projects/:id/github/sync` from Task 4.
 - Produces: nothing later tasks depend on.
 
 - [ ] **Step 1: Add the API types and call**
@@ -672,7 +935,7 @@ git commit -m "feat: 'Check for updates' button and Manual deploy chip"
 
 ---
 
-### Task 5: End-to-end verification
+### Task 6: End-to-end verification
 
 Unit tests mock away git and Docker, so nothing so far has proven the button works against a real repo.
 
