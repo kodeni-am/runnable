@@ -210,12 +210,13 @@ export default function ProjectDetail() {
         setRollbackLoading('');
     };
 
-    const handleGithubSync = async () => {
+    const handleGithubSync = async (force = false) => {
         if (!id) return;
+        if (force && !confirm('Rebuild and redeploy at the latest commit, even if nothing changed? The project will be rebuilt.')) return;
         setSyncing(true);
         setSyncMessage('');
         try {
-            const { data } = await projectsApi.syncGithub(id);
+            const { data } = await projectsApi.syncGithub(id, force);
             setSyncMessage(
                 data.upToDate
                     ? `Already up to date${data.commitSha ? ` — ${data.commitSha.slice(0, 7)}` : ''}`
@@ -617,8 +618,13 @@ export default function ProjectDetail() {
                                     </div>
                                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                                         {canStart && (
-                                            <button className="btn btn-secondary" onClick={handleGithubSync} disabled={syncing}>
+                                            <button className="btn btn-secondary" onClick={() => handleGithubSync(false)} disabled={syncing}>
                                                 {syncing ? <span className="spinner" /> : <RefreshCw size={16} />} Check for updates
+                                            </button>
+                                        )}
+                                        {canStart && (
+                                            <button className="btn btn-secondary" onClick={() => handleGithubSync(true)} disabled={syncing}>
+                                                <RotateCcw size={16} /> Force rebuild
                                             </button>
                                         )}
                                         {canEditConfig && <button className="btn btn-danger" onClick={handleGithubDisconnect}>Disconnect</button>}

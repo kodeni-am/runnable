@@ -121,7 +121,11 @@ router.delete('/:id/github/disconnect', requireProjectAccess(ProjectPermission.C
 router.post('/:id/github/sync', requireProjectAccess(ProjectPermission.CAN_START), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
-        const result = await GithubService.syncLatest(project.id);
+        const { force } = req.body ?? {};
+        if (force !== undefined && typeof force !== 'boolean') {
+            throw new AppError('force must be a boolean', 400);
+        }
+        const result = await GithubService.syncLatest(project.id, { force });
         res.json(result);
     } catch (error) {
         next(error);

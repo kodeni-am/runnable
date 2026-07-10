@@ -453,8 +453,13 @@ export class GithubService {
      * running. A project sitting at the tip in any other state (ERROR, STOPPED,
      * or a DEPLOYING left stale by a crash) is redeployed: that is the case
      * this button exists for.
+     *
+     * `opts.force` bypasses the skip entirely and always rebuilds at the
+     * branch tip — it does not deploy whatever happens to be checked out, it
+     * still fetches and resets to FETCH_HEAD first. When set, `upToDate` is
+     * always false.
      */
-    static async syncLatest(projectId: string): Promise<SyncResult> {
+    static async syncLatest(projectId: string, opts: { force?: boolean } = {}): Promise<SyncResult> {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
@@ -503,7 +508,7 @@ export class GithubService {
                     select: ['status'],
                 });
 
-                if (localSha && localSha === remoteSha && freshProject?.status === ServiceStatus.RUNNING) {
+                if (!opts.force && localSha && localSha === remoteSha && freshProject?.status === ServiceStatus.RUNNING) {
                     upToDate = true;
                     deployed.sha = localSha;
                     return false;

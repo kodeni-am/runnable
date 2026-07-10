@@ -159,4 +159,39 @@ describe('GithubService.syncLatest', () => {
         );
         expect(deployRepo.save).toHaveBeenCalled();
     });
+
+    it('rebuilds at the same commit when force is set on a running project', async () => {
+        stubProject(ServiceStatus.RUNNING);
+        stubGit(LOCAL_SHA, LOCAL_SHA);
+
+        const result = await GithubService.syncLatest('proj-1', { force: true });
+
+        expect(result.deployed).toBe(true);
+        expect(result.upToDate).toBe(false);
+        expect(SandboxService.exec).toHaveBeenCalledWith(
+            'proj-1', 'git', ['reset', '--hard', 'FETCH_HEAD'], '/srv/demo',
+        );
+        expect(deployRepo.create).toHaveBeenCalledWith(
+            expect.objectContaining({ trigger: 'manual', status: 'success' }),
+        );
+    });
+
+    it('still skips when force is absent on a running project at the tip', async () => {
+        stubProject(ServiceStatus.RUNNING);
+        stubGit(LOCAL_SHA, LOCAL_SHA);
+
+        const result = await GithubService.syncLatest('proj-1');
+
+        expect(result).toEqual({ deployed: false, upToDate: true, commitSha: LOCAL_SHA });
+    });
+
+    it('advances to the branch tip when force is set and the repo is behind', async () => {
+        stubProject(ServiceStatus.RUNNING);
+        stubGit(LOCAL_SHA, REMOTE_SHA);
+
+        const result = await GithubService.syncLatest('proj-1', { force: true });
+
+        expect(result.deployed).toBe(true);
+        expect(result.commitSha).toBe(REMOTE_SHA);
+    });
 });

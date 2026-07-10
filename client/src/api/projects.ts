@@ -153,7 +153,8 @@ export const projectsApi = {
     connectGithub: (id: string, repoUrl: string, branch?: string) =>
         api.post(`/projects/${id}/github/connect`, { repoUrl, branch }),
     disconnectGithub: (id: string) => api.delete(`/projects/${id}/github/disconnect`),
-    syncGithub: (id: string) => api.post<SyncResult>(`/projects/${id}/github/sync`),
+    syncGithub: (id: string, force?: boolean) =>
+        api.post<SyncResult>(`/projects/${id}/github/sync`, { force }),
 
     // Deployments
     listDeployments: (id: string) => api.get<Deployment[]>(`/projects/${id}/deployments`),
