@@ -196,11 +196,38 @@ three branches that carry the logic:
 Plus one regression test that `redeployExclusive` still deploys when `prepare`
 returns `undefined`, protecting the rollback path from the widened signature.
 
+## Amendment (2026-07-10): force rebuild
+
+The skip rule has a blind spot. When a zero-downtime deploy fails but the old
+container keeps serving, the design deliberately leaves the project at status
+`RUNNING` with the working tree already reset to the new tip. A later
+"Check for updates" then sees `HEAD == FETCH_HEAD && RUNNING` and reports
+"already up to date" — even though that commit never went live. The skip rule
+is faithful to this spec; the spec was wrong.
+
+A **force rebuild** control resolves it, and every other stuck state the skip
+rule can't see:
+
+- `GithubService.syncLatest(projectId, opts?: { force?: boolean })`. When
+  `force` is true, the SHA/status comparison is skipped entirely: the fetch,
+  the `git reset --hard FETCH_HEAD`, and the rebuild always run. `upToDate` is
+  then always `false` in the result.
+- Force still **fetches and resets to the branch tip**. It is "check for
+  updates, but always rebuild", not "rebuild whatever is checked out". A forced
+  click therefore can never deploy something older than the tip.
+- `trigger` stays `'manual'` — a forced sync is a manual deploy. The history
+  does not distinguish the two, because the deployed commit is what matters.
+- Route: `POST /:id/github/sync` accepts an optional `{ force?: boolean }` body,
+  gated on the same `CAN_START`. A non-boolean `force` is a 400.
+- UI: a secondary "Force rebuild" button beside "Check for updates", behind a
+  confirm dialog (it rebuilds a site that may be serving fine).
+
+This supersedes the "force-rebuild-at-current-commit control" line struck from
+Out of Scope below.
+
 ## Out of Scope
 
 - Webhook health checks, repair, or re-registration.
-- A force-rebuild-at-current-commit control (Restart and rollback already
-  cover the adjacent needs).
 - Manual sync for preview environments — previews are driven by
   `pull_request` events and have no tracked branch of their own.
 - Syncing a branch other than the one recorded on `githubRepo.branch`.
