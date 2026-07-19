@@ -5,4 +5,5 @@ export { CustomDomain } from './CustomDomain';
 export { AppSettings } from './AppSettings';
 export { ProjectCollaborator } from './ProjectCollaborator';
 export { Deployment } from './Deployment';
+export { WebAuthnCredential } from './WebAuthnCredential';
 export { Role, ServerType, ServiceStatus, ProjectPermission } from './enums';

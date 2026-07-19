@@ -1,5 +1,7 @@
 import { create } from 'zustand';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { authApi } from '../api/auth';
+import { passkeysApi } from '../api/passkeys';
 
 export interface UserPermissions {
     maxProjects: number | null;
@@ -24,6 +26,7 @@ interface AuthState {
     isAuthenticated: boolean;
     isLoading: boolean;
     login: (email: string, password: string) => Promise<void>;
+    loginWithPasskey: () => Promise<void>;
     register: (email: string, username: string, password: string) => Promise<void>;
     logout: () => Promise<void>;
     loadUser: () => Promise<void>;
@@ -39,6 +42,20 @@ export const useAuthStore = create<AuthState>((set) => ({
         set({ isLoading: true });
         try {
             const { data } = await authApi.login({ email, password });
+            // Tokens are set as HTTP-only cookies by the server
+            set({ user: data.user as User, isAuthenticated: true, isLoading: false });
+        } catch (error) {
+            set({ isLoading: false });
+            throw error;
+        }
+    },
+
+    loginWithPasskey: async () => {
+        set({ isLoading: true });
+        try {
+            const { data: options } = await passkeysApi.loginOptions();
+            const response = await startAuthentication({ optionsJSON: options });
+            const { data } = await passkeysApi.loginVerify({ response });
             // Tokens are set as HTTP-only cookies by the server
             set({ user: data.user as User, isAuthenticated: true, isLoading: false });
         } catch (error) {

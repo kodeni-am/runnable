@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { Github, Mail } from 'lucide-react';
+import { Github, Mail, KeyRound } from 'lucide-react';
 import { usePageTitle } from '../hooks/usePageTitle';
 
 export default function Login() {
@@ -16,7 +16,7 @@ export default function Login() {
             ? 'The sign-in attempt could not be verified. Please try again.'
             : ''
     );
-    const { login, isLoading } = useAuthStore();
+    const { login, loginWithPasskey, isLoading } = useAuthStore();
     const navigate = useNavigate();
 
     const handleSubmit = async (e: FormEvent) => {
@@ -27,6 +27,18 @@ export default function Login() {
             navigate('/');
         } catch (err: any) {
             setError(err.response?.data?.error || 'Login failed');
+        }
+    };
+
+    const handlePasskeyLogin = async () => {
+        setError('');
+        try {
+            await loginWithPasskey();
+            navigate('/');
+        } catch (err: any) {
+            // User dismissed the browser prompt — not an error worth showing
+            if (err?.name === 'NotAllowedError' || err?.code === 'ERROR_CEREMONY_ABORTED') return;
+            setError(err.response?.data?.error || 'Passkey sign-in failed');
         }
     };
 
@@ -78,6 +90,19 @@ export default function Login() {
                         Google
                     </a>
                 </div>
+
+                {!!window.PublicKeyCredential && (
+                    <button
+                        type="button"
+                        onClick={handlePasskeyLogin}
+                        className="btn btn-secondary btn-full"
+                        style={{ marginTop: 12 }}
+                        disabled={isLoading}
+                    >
+                        <KeyRound size={18} />
+                        Sign in with a passkey
+                    </button>
+                )}
 
                 <p style={{ textAlign: 'center', marginTop: 24, fontSize: 14 }}>
                     Don't have an account? <Link to="/register" style={{ color: 'var(--accent)' }}>Sign up</Link>

@@ -7,7 +7,7 @@ const api = axios.create({
 });
 
 // Endpoints that should NOT trigger token refresh or redirect on 401
-const AUTH_ENDPOINTS = ['/auth/me', '/auth/login', '/auth/register', '/auth/refresh', '/auth/logout'];
+const AUTH_ENDPOINTS = ['/auth/me', '/auth/login', '/auth/register', '/auth/refresh', '/auth/logout', '/auth/passkeys/login'];
 
 // Auto-refresh on 401
 api.interceptors.response.use(

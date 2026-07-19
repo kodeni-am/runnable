@@ -9,6 +9,7 @@ import {
 import { Role } from './enums';
 import { Project } from './Project';
 import { ProjectCollaborator } from './ProjectCollaborator';
+import { WebAuthnCredential } from './WebAuthnCredential';
 
 export interface UserPermissions {
     maxProjects: number | null;
@@ -92,6 +93,9 @@ export class User {
 
     @OneToMany(() => ProjectCollaborator, (collab) => collab.user)
     collaborations: ProjectCollaborator[];
+
+    @OneToMany(() => WebAuthnCredential, (cred) => cred.user)
+    passkeys: WebAuthnCredential[];
 
     @CreateDateColumn()
     createdAt: Date;
