@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Shield, User, Key, KeyRound, Trash2 } from 'lucide-react';
+import { startRegistration } from '@simplewebauthn/browser';
 import Layout from '../components/Layout';
 import { useAuthStore } from '../store/authStore';
-import { Shield, User, Key } from 'lucide-react';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { authApi } from '../api/auth';
+import { passkeysApi, type PasskeySummary } from '../api/passkeys';
 
 export default function Settings() {
     usePageTitle('Settings');
@@ -21,6 +23,52 @@ export default function Settings() {
     const [emailError, setEmailError] = useState('');
     const [emailSuccess, setEmailSuccess] = useState('');
     const [emailLoading, setEmailLoading] = useState(false);
+
+    const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
+    const [pkName, setPkName] = useState('');
+    const [pkError, setPkError] = useState('');
+    const [pkSuccess, setPkSuccess] = useState('');
+    const [pkLoading, setPkLoading] = useState(false);
+    const webauthnSupported = !!window.PublicKeyCredential;
+
+    useEffect(() => {
+        passkeysApi.list()
+            .then(({ data }) => setPasskeys(data))
+            .catch(() => { /* non-fatal — section just shows empty */ });
+    }, []);
+
+    const handleAddPasskey = async (e: FormEvent) => {
+        e.preventDefault();
+        setPkError('');
+        setPkSuccess('');
+        setPkLoading(true);
+        try {
+            const { data: options } = await passkeysApi.registerOptions();
+            const response = await startRegistration({ optionsJSON: options });
+            const { data: created } = await passkeysApi.registerVerify({ response, name: pkName });
+            setPasskeys((prev) => [...prev, created]);
+            setPkName('');
+            setPkSuccess('Passkey added');
+        } catch (err: any) {
+            // User dismissed the browser prompt — quiet no-op
+            if (err?.name !== 'NotAllowedError' && err?.code !== 'ERROR_CEREMONY_ABORTED') {
+                setPkError(err.response?.data?.error || 'Failed to add passkey');
+            }
+        } finally {
+            setPkLoading(false);
+        }
+    };
+
+    const handleDeletePasskey = async (id: string) => {
+        if (!confirm('Remove this passkey? You will no longer be able to sign in with it.')) return;
+        setPkError('');
+        try {
+            await passkeysApi.remove(id);
+            setPasskeys((prev) => prev.filter((p) => p.id !== id));
+        } catch (err: any) {
+            setPkError(err.response?.data?.error || 'Failed to remove passkey');
+        }
+    };
 
     const handleChangeEmail = async (e: FormEvent) => {
         e.preventDefault();
@@ -211,6 +259,65 @@ export default function Settings() {
                                 )}
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <div style={{ marginTop: 32 }}>
+                    <h3 style={{ marginBottom: 16 }}>Passkeys</h3>
+                    <div className="info-card glass" style={{ maxWidth: 520 }}>
+                        {pkError && <div className="alert alert-error">{pkError}</div>}
+                        {pkSuccess && <div className="alert alert-success">{pkSuccess}</div>}
+
+                        {passkeys.length > 0 && (
+                            <div style={{ marginBottom: 16 }}>
+                                {passkeys.map((pk) => (
+                                    <div
+                                        key={pk.id}
+                                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))' }}
+                                    >
+                                        <div>
+                                            <div style={{ fontSize: 14, fontWeight: 500 }}>
+                                                <KeyRound size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />
+                                                {pk.name}
+                                            </div>
+                                            <div style={{ fontSize: 12, opacity: 0.7 }}>
+                                                Added {new Date(pk.createdAt).toLocaleDateString()}
+                                                {pk.lastUsedAt && ` · Last used ${new Date(pk.lastUsedAt).toLocaleDateString()}`}
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => handleDeletePasskey(pk.id)}
+                                            className="btn btn-secondary"
+                                            style={{ fontSize: 13, padding: '6px 10px' }}
+                                            title="Remove passkey"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {webauthnSupported ? (
+                            <form onSubmit={handleAddPasskey}>
+                                <div className="form-group">
+                                    <label>Passkey Name</label>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        placeholder="e.g. MacBook Touch ID"
+                                        value={pkName}
+                                        onChange={(e) => setPkName(e.target.value)}
+                                        maxLength={64}
+                                    />
+                                </div>
+                                <button type="submit" className="btn btn-primary" disabled={pkLoading}>
+                                    {pkLoading ? <span className="spinner" /> : 'Add Passkey'}
+                                </button>
+                            </form>
+                        ) : (
+                            <p style={{ fontSize: 14, opacity: 0.7 }}>Your browser doesn't support passkeys.</p>
+                        )}
                     </div>
                 </div>
             </div>
