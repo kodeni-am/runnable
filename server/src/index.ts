@@ -24,6 +24,7 @@ import bcrypt from 'bcryptjs';
 
 // Routes
 import authRoutes from './routes/auth.routes';
+import passkeyRoutes from './routes/passkeys.routes';
 import projectRoutes from './routes/projects.routes';
 import fileRoutes from './routes/files.routes';
 import githubRoutes from './routes/github.routes';
@@ -222,6 +223,7 @@ async function bootstrap() {
 
     // API Routes
     app.use('/api/auth', authRoutes);
+    app.use('/api/auth/passkeys', passkeyRoutes);
     app.use('/api/projects', projectRoutes);
     app.use('/api/projects', fileRoutes);
     app.use('/api/projects', githubRoutes);

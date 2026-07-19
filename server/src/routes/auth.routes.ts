@@ -11,7 +11,7 @@ import { config } from '../config';
 const router = Router();
 
 // Rate limiters to prevent brute-force and flooding
-const authLimiter = rateLimit({
+export const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 10, // 10 attempts per window
     message: { error: 'Too many attempts, please try again later' },
@@ -141,7 +141,7 @@ if (config.google.clientId) {
 const isProduction = config.nodeEnv === 'production';
 
 // Same user shape as GET /me, so the SPA gets isApproved and OAuth link state on login
-function serializeUser(user: import('../entities').User) {
+export function serializeUser(user: import('../entities').User) {
     return {
         id: user.id,
         email: user.email,
@@ -161,7 +161,7 @@ function sanitizeRedirect(redirect: unknown): string {
     return '/auth/callback';
 }
 
-function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
+export function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
     res.cookie('accessToken', accessToken, {
         httpOnly: true,
         secure: isProduction,
