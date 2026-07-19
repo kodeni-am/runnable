@@ -97,6 +97,9 @@ describe('PasskeyService.verifyRegistration', () => {
         expect(summary).not.toHaveProperty('publicKey');
         expect(summary).not.toHaveProperty('credentialId');
         expect(summary.name).toBe('Passkey');
+        expect(verifyRegistrationResponse).toHaveBeenCalledWith(
+            expect.objectContaining({ expectedOrigin: 'http://localhost:5175' })
+        );
     });
 
     it('rejects a duplicate credential with 409', async () => {
@@ -138,6 +141,13 @@ describe('PasskeyService.verifyLogin', () => {
 
         await expect(PasskeyService.verifyLogin({ id: 'nope' }, 'chal'))
             .rejects.toMatchObject({ statusCode: 401, message: 'Invalid credentials' });
+        expect(verifyAuthenticationResponse).not.toHaveBeenCalled();
+    });
+
+    it('returns generic 401 for a non-string credential id without querying the repository', async () => {
+        await expect(PasskeyService.verifyLogin({ id: {} }, 'chal'))
+            .rejects.toMatchObject({ statusCode: 401, message: 'Invalid credentials' });
+        expect(credRepo.findOne).not.toHaveBeenCalled();
         expect(verifyAuthenticationResponse).not.toHaveBeenCalled();
     });
 

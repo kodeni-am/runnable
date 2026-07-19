@@ -24,7 +24,7 @@ vi.mock('../middleware/auth', () => ({
     }),
 }));
 
-import passkeyRoutes from '../routes/passkeys.routes';
+import passkeyRoutes, { signChallenge } from '../routes/passkeys.routes';
 import { PasskeyService } from '../services/passkey.service';
 import { errorHandler } from '../middleware/errorHandler';
 
@@ -37,7 +37,7 @@ function makeApp() {
     return app;
 }
 
-const CHALLENGE_COOKIE = 'webauthnChallenge=test-challenge';
+const CHALLENGE_COOKIE = `webauthnChallenge=${signChallenge('test-challenge')}`;
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -58,7 +58,7 @@ describe('passkey registration routes', () => {
 
         expect(res.body.challenge).toBe('abc');
         const cookies = ((res.headers['set-cookie'] || []) as string[]).join(';');
-        expect(cookies).toContain('webauthnChallenge=abc');
+        expect(cookies).toContain('webauthnChallenge=abc.');
         expect(cookies).toContain('HttpOnly');
     });
 
@@ -86,6 +86,31 @@ describe('passkey registration routes', () => {
         await request(makeApp())
             .post('/api/auth/passkeys/register/verify')
             .set('x-test-auth', 'yes')
+            .send({ response: {}, name: 'x' })
+            .expect(400);
+        expect(PasskeyService.verifyRegistration).not.toHaveBeenCalled();
+    });
+
+    it('register/verify with a tampered challenge cookie → 400', async () => {
+        const signed = signChallenge('test-challenge');
+        const tampered = `${signed.slice(0, -1)}${signed.at(-1) === '0' ? '1' : '0'}`;
+
+        await request(makeApp())
+            .post('/api/auth/passkeys/register/verify')
+            .set('x-test-auth', 'yes')
+            .set('Cookie', `webauthnChallenge=${tampered}`)
+            .send({ response: {}, name: 'x' })
+            .expect(400);
+        expect(PasskeyService.verifyRegistration).not.toHaveBeenCalled();
+    });
+
+    it('register/verify with an expired challenge cookie → 400', async () => {
+        const expired = signChallenge('test-challenge', Date.now() - 6 * 60 * 1000);
+
+        await request(makeApp())
+            .post('/api/auth/passkeys/register/verify')
+            .set('x-test-auth', 'yes')
+            .set('Cookie', `webauthnChallenge=${expired}`)
             .send({ response: {}, name: 'x' })
             .expect(400);
         expect(PasskeyService.verifyRegistration).not.toHaveBeenCalled();
@@ -125,7 +150,7 @@ describe('passkey login routes', () => {
             .post('/api/auth/passkeys/login/options')
             .expect(200);
 
-        expect(((res.headers['set-cookie'] || []) as string[]).join(';')).toContain('webauthnChallenge=login-chal');
+        expect(((res.headers['set-cookie'] || []) as string[]).join(';')).toContain('webauthnChallenge=login-chal.');
     });
 
     it('login/verify sets auth cookies and returns the serialized user', async () => {

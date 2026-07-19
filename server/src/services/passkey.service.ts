@@ -72,7 +72,7 @@ export class PasskeyService {
             verification = await verifyRegistrationResponse({
                 response: response as any,
                 expectedChallenge,
-                expectedOrigin: config.clientUrl,
+                expectedOrigin: new URL(config.clientUrl).origin,
                 expectedRPID: rpID(),
             });
         } catch {
@@ -132,7 +132,7 @@ export class PasskeyService {
         expectedChallenge: string
     ): Promise<{ user: User; accessToken: string; refreshToken: string }> {
         const credentialId = (response as any)?.id;
-        const cred = credentialId
+        const cred = typeof credentialId === 'string' && credentialId.length > 0
             ? await credRepo().findOne({ where: { credentialId }, relations: ['user'] })
             : null;
         if (!cred) {
@@ -144,7 +144,7 @@ export class PasskeyService {
             verification = await verifyAuthenticationResponse({
                 response: response as any,
                 expectedChallenge,
-                expectedOrigin: config.clientUrl,
+                expectedOrigin: new URL(config.clientUrl).origin,
                 expectedRPID: rpID(),
                 credential: {
                     id: cred.credentialId,
