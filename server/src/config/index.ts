@@ -13,6 +13,9 @@ dotenv.config({ path: envPath });
 export const config = {
     port: parseInt(process.env.PORT || '3001', 10),
     nodeEnv: process.env.NODE_ENV || 'development',
+    // Public URL of the SPA — also the WebAuthn expected origin; its
+    // hostname is the WebAuthn rpID.
+    clientUrl: process.env.CLIENT_URL || 'http://localhost:5175',
 
     admin: {
         email: process.env.ADMIN_EMAIL || 'admin@localhost',
