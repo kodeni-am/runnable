@@ -205,3 +205,18 @@ sudo systemctl restart runnable
 | `--email`  | Admin email address **(required)**       | —           |
 | `--repo`   | Git repository URL to clone from         | Current dir |
 | `--branch` | Git branch to use                        | `main`      |
+
+## Private NPM Registries
+
+A project can install from a private npm registry: set the registry URL, an
+optional scope, and an auth token in the project's settings. The token is
+encrypted at rest and written to a temporary `.npmrc` only for the duration of
+each build.
+
+### Rotating JWT_SECRET
+
+`JWT_SECRET` also derives the key that encrypts stored private-registry npm
+tokens. Rotating it invalidates every session (expected) **and** makes stored
+registry tokens undecryptable — affected projects fail their next build with
+"Stored npm registry token could not be decrypted" until the token is re-entered
+in project settings.
