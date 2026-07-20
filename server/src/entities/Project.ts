@@ -56,6 +56,22 @@ export class Project {
     @Column({ type: 'simple-json', nullable: true })
     envVars?: Record<string, string>;
 
+    /** Private npm registry base URL, e.g. https://npm.pkg.github.com/ */
+    @Column({ nullable: true })
+    npmRegistryUrl?: string;
+
+    /** Optional npm scope the registry is bound to, e.g. "@acme". */
+    @Column({ nullable: true })
+    npmRegistryScope?: string;
+
+    /**
+     * Registry auth token, encrypted by crypto.service. `select: false` keeps
+     * it out of every default query so it can never serialize into an API
+     * response — it must be loaded explicitly with addSelect.
+     */
+    @Column({ type: 'text', nullable: true, select: false })
+    npmAuthTokenEncrypted?: string;
+
     /** True when this APP project should be managed with docker compose */
     @Column({ default: false })
     useCompose: boolean;
