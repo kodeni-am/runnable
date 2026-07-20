@@ -62,6 +62,7 @@ export interface Project {
     baseDomain?: string | null;
     lastActivityAt?: string;
     userId: string;
+    npmRegistry?: NpmRegistry;
     githubRepo?: {
         id: string;
         repoUrl: string;
@@ -120,6 +121,12 @@ export interface SyncResult {
     upToDate: boolean;
     commitSha?: string;
     deployment?: Deployment;
+}
+
+export interface NpmRegistry {
+    url: string | null;
+    scope: string | null;
+    configured: boolean;
 }
 
 export const projectsApi = {
@@ -195,4 +202,9 @@ export const projectsApi = {
         api.put<Collaborator>(`/projects/${id}/collaborators/${userId}`, { permissions }),
     removeCollaborator: (id: string, userId: string) =>
         api.delete(`/projects/${id}/collaborators/${userId}`),
+
+    // NPM registry
+    setNpmRegistry: (id: string, data: { url: string; scope: string; token: string }) =>
+        api.put<{ npmRegistry: NpmRegistry }>(`/projects/${id}/npm-registry`, data),
+    removeNpmRegistry: (id: string) => api.delete(`/projects/${id}/npm-registry`),
 };

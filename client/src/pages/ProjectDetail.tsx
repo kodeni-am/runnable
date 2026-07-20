@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
 import { projectsApi, type Project, type Collaborator, type ProjectPermissions, type Deployment } from '../api/projects';
@@ -93,6 +93,14 @@ export default function ProjectDetail() {
     const [previewBaseDomain, setPreviewBaseDomain] = useState('');
     const [previewTtlDays, setPreviewTtlDays] = useState('7');
     const [previewEnvOverridesText, setPreviewEnvOverridesText] = useState('');
+    // NPM registry
+    const [npmUrl, setNpmUrl] = useState('');
+    const [npmScope, setNpmScope] = useState('');
+    const [npmToken, setNpmToken] = useState('');
+    const [npmConfigured, setNpmConfigured] = useState(false);
+    const [npmError, setNpmError] = useState('');
+    const [npmSuccess, setNpmSuccess] = useState('');
+    const [npmLoading, setNpmLoading] = useState(false);
 
     // Collaborator state
     const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -145,6 +153,10 @@ export default function ProjectDetail() {
                     setPreviewBaseDomain(p.previewBaseDomain || '');
                     setPreviewTtlDays(p.previewTtlDays != null ? String(p.previewTtlDays) : '7');
                     setPreviewEnvOverridesText(Object.entries(p.previewEnvOverrides || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
+                    setNpmUrl(p.npmRegistry?.url || '');
+                    setNpmScope(p.npmRegistry?.scope || '');
+                    setNpmConfigured(p.npmRegistry?.configured || false);
+                    setNpmToken('');
                 }
             });
         }
@@ -408,6 +420,45 @@ export default function ProjectDetail() {
             await projectsApi.removeCollaborator(id, userId);
             loadCollaborators();
         } catch { }
+    };
+
+    const handleSaveRegistry = async (e: FormEvent) => {
+        e.preventDefault();
+        if (!id) return;
+        setNpmError('');
+        setNpmSuccess('');
+        setNpmLoading(true);
+        try {
+            const { data } = await projectsApi.setNpmRegistry(id, {
+                url: npmUrl,
+                scope: npmScope,
+                token: npmToken,
+            });
+            setNpmConfigured(data.npmRegistry.configured);
+            setNpmToken('');
+            setNpmSuccess('Registry saved. It applies on the next deploy.');
+        } catch (err: any) {
+            setNpmError(err.response?.data?.error || 'Failed to save registry');
+        }
+        setNpmLoading(false);
+    };
+
+    const handleRemoveRegistry = async () => {
+        if (!id || !confirm('Remove the private registry configuration?')) return;
+        setNpmError('');
+        setNpmSuccess('');
+        setNpmLoading(true);
+        try {
+            await projectsApi.removeNpmRegistry(id);
+            setNpmUrl('');
+            setNpmScope('');
+            setNpmToken('');
+            setNpmConfigured(false);
+            setNpmSuccess('Registry configuration removed.');
+        } catch (err: any) {
+            setNpmError(err.response?.data?.error || 'Failed to remove registry');
+        }
+        setNpmLoading(false);
     };
 
     const addEnvVar = () => setEnvVars([...envVars, { key: '', value: '' }]);
@@ -1295,6 +1346,70 @@ export default function ProjectDetail() {
                                     </button>
                                 </div>
                             )}
+
+                            {/* ── PRIVATE NPM REGISTRY ─────────────────────────────── */}
+                            <div style={{ marginTop: 40, paddingTop: 30, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                                <h3 style={{ marginBottom: 10 }}>NPM Registry</h3>
+                                <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+                                    Install dependencies from a private registry. The token is encrypted and never shown again.
+                                </p>
+                                {npmError && <div className="alert alert-error">{npmError}</div>}
+                                {npmSuccess && <div className="alert alert-success">{npmSuccess}</div>}
+                                <form onSubmit={handleSaveRegistry} style={{ maxWidth: 480 }}>
+                                    <div className="form-group">
+                                        <label>Registry URL</label>
+                                        <input
+                                            type="url"
+                                            className="form-input"
+                                            placeholder="https://npm.pkg.github.com/"
+                                            value={npmUrl}
+                                            onChange={(e) => setNpmUrl(e.target.value)}
+                                            disabled={!canEditConfig}
+                                            required
+                                        />
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Scope (optional)</label>
+                                        <input
+                                            type="text"
+                                            className="form-input"
+                                            placeholder="@my-org"
+                                            value={npmScope}
+                                            onChange={(e) => setNpmScope(e.target.value)}
+                                            disabled={!canEditConfig}
+                                        />
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Auth Token</label>
+                                        <input
+                                            type="password"
+                                            className="form-input"
+                                            placeholder="••••••••"
+                                            value={npmToken}
+                                            onChange={(e) => setNpmToken(e.target.value)}
+                                            disabled={!canEditConfig}
+                                            required={!npmConfigured}
+                                        />
+                                        {npmConfigured && (
+                                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                A token is saved. Leave blank to keep it.
+                                            </p>
+                                        )}
+                                    </div>
+                                    {canEditConfig && (
+                                        <div style={{ display: 'flex', gap: 8 }}>
+                                            <button type="submit" className="btn btn-primary" disabled={npmLoading}>
+                                                {npmLoading ? <span className="spinner" /> : 'Save Registry'}
+                                            </button>
+                                            {npmConfigured && (
+                                                <button type="button" className="btn btn-secondary" onClick={handleRemoveRegistry} disabled={npmLoading}>
+                                                    Remove
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                </form>
+                            </div>
                         </div>
                     </div>
                 )}

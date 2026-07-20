@@ -19,11 +19,53 @@ import { ProjectTeardownService } from '../services/projectTeardown.service';
 import { GithubService } from '../services/github.service';
 import { PreviewService } from '../services/preview.service';
 import { getTemplate } from '../templates/catalog';
+import { encryptSecret } from '../services/crypto.service';
 
 const router = Router();
 
 // All routes require authentication and admin approval
 router.use(authenticate, requireApproval);
+
+// npm scope grammar: "@" followed by npm's package-name character set.
+const SCOPE_RE = /^@[a-z0-9-~][a-z0-9-._~]*$/;
+
+/**
+ * Validate and normalize registry input. Throws AppError(400) on bad input.
+ */
+export function validateRegistryInput(rawUrl: unknown, rawScope: unknown): { url: string; scope: string | null } {
+    const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        throw new AppError('A valid http(s) registry URL is required', 400);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new AppError('A valid http(s) registry URL is required', 400);
+    }
+
+    const scopeInput = typeof rawScope === 'string' ? rawScope.trim() : '';
+    if (!scopeInput) {
+        return { url, scope: null };
+    }
+    if (!SCOPE_RE.test(scopeInput)) {
+        throw new AppError('Scope must look like "@my-org"', 400);
+    }
+    return { url, scope: scopeInput };
+}
+
+/**
+ * Public shape of a project's registry config. The token is never included —
+ * `configured` is derived from the URL, which the API keeps in lockstep with
+ * the stored token.
+ */
+export function serializeNpmRegistry(project: Project): { url: string | null; scope: string | null; configured: boolean } {
+    return {
+        url: project.npmRegistryUrl || null,
+        scope: project.npmRegistryScope || null,
+        configured: !!project.npmRegistryUrl,
+    };
+}
 
 // List user's projects (owned + collaborating)
 router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -160,7 +202,7 @@ router.post('/from-template', async (req: AuthRequest, res: Response, next: Next
 router.get('/:id', requireProjectAccess(), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
-        res.json(project);
+        res.json({ ...project, npmRegistry: serializeNpmRegistry(project) });
     } catch (error) {
         next(error);
     }
@@ -302,6 +344,66 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
             ).catch(() => { /* best-effort; previews still work on the next reconnect */ });
         }
         res.json(project);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Set the private npm registry config (requires canEditConfig)
+router.put('/:id/npm-registry', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const { url, scope } = validateRegistryInput(req.body?.url, req.body?.scope);
+
+        const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+        const repo = AppDataSource.getRepository(Project);
+
+        // An omitted token keeps the stored one, so the URL or scope can be
+        // changed without re-entering the secret. A token is required when
+        // nothing is stored yet — this maintains the invariant that a URL is
+        // present only when a token is too.
+        const update: Partial<Project> = {
+            npmRegistryUrl: url,
+            // `scope` is `null` (not `undefined`) when the caller omits it, so it
+            // genuinely clears a previously stored scope. TypeORM's
+            // UpdateQueryBuilder strips `undefined` keys before building the SET
+            // clause, so `undefined` here would silently leave the old scope in
+            // the DB while the response below claims it was cleared.
+            // `Partial<Project>` only types this column as `string | undefined`,
+            // hence the cast.
+            npmRegistryScope: scope as any,
+        };
+        if (token) {
+            update.npmAuthTokenEncrypted = encryptSecret(token);
+        } else if (!project.npmRegistryUrl) {
+            throw new AppError('An auth token is required', 400);
+        }
+
+        await repo.update(project.id, update);
+        res.json({ npmRegistry: { url, scope, configured: true } });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Remove the private npm registry config (requires canEditConfig)
+router.delete('/:id/npm-registry', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        // TypeORM's UpdateQueryBuilder drops every key whose value is
+        // `undefined` before building the SET clause, and throws
+        // UpdateValuesMissingError if none remain — so this must pass `null`,
+        // not `undefined`, for every field. The columns are all
+        // `@Column({ nullable: true })`, so `null` is a valid value; the cast
+        // is needed because the entity types these columns as
+        // `string | undefined`.
+        const cleared = {
+            npmRegistryUrl: null,
+            npmRegistryScope: null,
+            npmAuthTokenEncrypted: null,
+        } as unknown as Partial<Project>;
+        await AppDataSource.getRepository(Project).update(project.id, cleared);
+        res.json({ message: 'Registry configuration removed' });
     } catch (error) {
         next(error);
     }

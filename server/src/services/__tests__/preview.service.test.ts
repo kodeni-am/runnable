@@ -16,8 +16,9 @@ const teardown = vi.fn();
 vi.mock('../projectTeardown.service', () => ({
     ProjectTeardownService: { teardown: (...a: any[]) => teardown(...a) },
 }));
+const loadRegistryToken = vi.fn(async (_projectId: string): Promise<string | null> => null);
 vi.mock('../process.service', () => ({
-    ProcessService: { start: vi.fn(), redeploy: vi.fn(async () => true) },
+    ProcessService: { start: vi.fn(), redeploy: vi.fn(async () => true), loadRegistryToken: (id: string) => loadRegistryToken(id) },
 }));
 vi.mock('../github.service', () => ({
     GithubService: { cloneRepo: vi.fn(), pullLatest: vi.fn(), recordDeployment: vi.fn() },
@@ -42,6 +43,8 @@ const pr: PullRequestInfo = {
 beforeEach(() => {
     vi.clearAllMocks();
     findOne.mockReset();
+    loadRegistryToken.mockReset();
+    loadRegistryToken.mockResolvedValue(null);
 });
 
 describe('PreviewService.handlePullRequest guards', () => {
@@ -66,6 +69,42 @@ describe('PreviewService routing', () => {
         const r = await PreviewService.handlePullRequest(parent, 'opened', pr);
         expect(r).toBe('created');
         expect(provisionCore).toHaveBeenCalledOnce();
+    });
+
+    it('propagates the parent\'s private registry config to a new preview, fetching the select:false ciphertext explicitly', async () => {
+        const registryParent = {
+            ...parent,
+            npmRegistryUrl: 'https://npm.pkg.github.com/',
+            npmRegistryScope: '@acme',
+            // Not set here: a normally-loaded/joined project never carries
+            // npmAuthTokenEncrypted (select: false), so the fix must not
+            // depend on it being present on `parent`.
+        };
+        findOne.mockResolvedValueOnce(null);                 // findPreview → none
+        findOne.mockResolvedValueOnce({ id: 'owner-1', githubToken: 't' }); // owner
+        loadRegistryToken.mockResolvedValueOnce('cipher-x');
+        provisionCore.mockResolvedValue({ id: 'preview-1', directoryPath: '/srv/x' });
+
+        const r = await PreviewService.handlePullRequest(registryParent, 'opened', pr);
+
+        expect(r).toBe('created');
+        expect(loadRegistryToken).toHaveBeenCalledWith('parent-1');
+        const extras = provisionCore.mock.calls[0][4];
+        expect(extras.npmRegistryUrl).toBe('https://npm.pkg.github.com/');
+        expect(extras.npmRegistryScope).toBe('@acme');
+        expect(extras.npmAuthTokenEncrypted).toBe('cipher-x');
+    });
+
+    it('does not look up a registry token for a parent with no registry configured', async () => {
+        findOne.mockResolvedValueOnce(null);
+        findOne.mockResolvedValueOnce({ id: 'owner-1', githubToken: 't' });
+        provisionCore.mockResolvedValue({ id: 'preview-1', directoryPath: '/srv/x' });
+
+        await PreviewService.handlePullRequest(parent, 'opened', pr);
+
+        expect(loadRegistryToken).not.toHaveBeenCalled();
+        const extras = provisionCore.mock.calls[0][4];
+        expect(extras.npmAuthTokenEncrypted).toBeUndefined();
     });
 
     it('redeploys when a preview already exists on synchronize', async () => {
