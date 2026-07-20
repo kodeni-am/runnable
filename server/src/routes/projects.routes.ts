@@ -362,7 +362,17 @@ router.put('/:id/npm-registry', requireProjectAccess(ProjectPermission.CAN_EDIT_
         // changed without re-entering the secret. A token is required when
         // nothing is stored yet — this maintains the invariant that a URL is
         // present only when a token is too.
-        const update: Partial<Project> = { npmRegistryUrl: url, npmRegistryScope: scope ?? undefined };
+        const update: Partial<Project> = {
+            npmRegistryUrl: url,
+            // `scope` is `null` (not `undefined`) when the caller omits it, so it
+            // genuinely clears a previously stored scope. TypeORM's
+            // UpdateQueryBuilder strips `undefined` keys before building the SET
+            // clause, so `undefined` here would silently leave the old scope in
+            // the DB while the response below claims it was cleared.
+            // `Partial<Project>` only types this column as `string | undefined`,
+            // hence the cast.
+            npmRegistryScope: scope as any,
+        };
         if (token) {
             update.npmAuthTokenEncrypted = encryptSecret(token);
         } else if (!project.npmRegistryUrl) {
@@ -380,11 +390,19 @@ router.put('/:id/npm-registry', requireProjectAccess(ProjectPermission.CAN_EDIT_
 router.delete('/:id/npm-registry', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
-        await AppDataSource.getRepository(Project).update(project.id, {
-            npmRegistryUrl: undefined,
-            npmRegistryScope: undefined,
-            npmAuthTokenEncrypted: undefined,
-        });
+        // TypeORM's UpdateQueryBuilder drops every key whose value is
+        // `undefined` before building the SET clause, and throws
+        // UpdateValuesMissingError if none remain — so this must pass `null`,
+        // not `undefined`, for every field. The columns are all
+        // `@Column({ nullable: true })`, so `null` is a valid value; the cast
+        // is needed because the entity types these columns as
+        // `string | undefined`.
+        const cleared = {
+            npmRegistryUrl: null,
+            npmRegistryScope: null,
+            npmAuthTokenEncrypted: null,
+        } as unknown as Partial<Project>;
+        await AppDataSource.getRepository(Project).update(project.id, cleared);
         res.json({ message: 'Registry configuration removed' });
     } catch (error) {
         next(error);
