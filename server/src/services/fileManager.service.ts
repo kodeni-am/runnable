@@ -22,6 +22,13 @@ export class FileManagerService {
         if (resolved !== base && !resolved.startsWith(base + path.sep)) {
             throw new AppError('Invalid file path: path traversal detected', 400);
         }
+        // Dotfiles hold credentials the browser must never expose or overwrite
+        // (.npmrc written during builds, .runnable.env, .git internals).
+        // listFiles already hides them; this closes direct-path access.
+        const relative = path.relative(base, resolved);
+        if (relative && relative.split(path.sep).some(segment => segment.startsWith('.'))) {
+            throw new AppError('Access to dotfiles is not permitted', 403);
+        }
         return resolved;
     }
 

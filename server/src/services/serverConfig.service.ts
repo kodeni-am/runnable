@@ -84,6 +84,8 @@ export class ServerConfigService {
         if (options.serverType === ServerType.STATIC) {
             configStr += `${domainList} {
 ${tlsBlock}  root * ${options.directoryPath}
+  @dot path /.*
+  respond @dot 403
   file_server
   encode gzip zstd
   log {
