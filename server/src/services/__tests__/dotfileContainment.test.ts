@@ -7,15 +7,40 @@ import { FileManagerService } from '../fileManager.service';
 import { ServerType } from '../../entities';
 
 describe('static site dotfile protection', () => {
-    it('blocks dotfile requests for static sites', async () => {
+    // These assertions check the generated Caddy config text only — they do
+    // not run Caddy, so they document intent rather than verify runtime
+    // matcher behavior.
+    it('blocks dotfile requests for static sites, at any path depth, while allowing .well-known', async () => {
         const out = await ServerConfigService.generateConfig({
             subdomain: 'site',
             directoryPath: '/srv/site',
             port: 0,
             serverType: ServerType.STATIC,
         });
-        expect(out).toContain('@dot path /.*');
+        expect(out).toContain('path_regexp (^|/)\\.');
+        expect(out).toContain('not path /.well-known/*');
         expect(out).toContain('respond @dot 403');
+    });
+
+    // path_regexp runs on RE2 (Go's regexp package), which has no lookaround
+    // support, so the "except .well-known" exclusion can't live inside the
+    // regex itself (e.g. `(?!well-known/)` is not valid RE2). It is instead
+    // expressed structurally as a second, ANDed `not path` matcher in the
+    // same @dot block — this test documents that split.
+    it('the dot regex alone matches a root and a nested dotfile, including under .well-known', () => {
+        const re = /(^|\/)\./;
+        // Matched by the regex in isolation: root-anchored and nested
+        // dotfiles/dot-directories, at any depth.
+        expect(re.test('/.env')).toBe(true);
+        expect(re.test('/.npmrc')).toBe(true);
+        expect(re.test('/assets/.env')).toBe(true);
+        expect(re.test('/a/b/.git/config')).toBe(true);
+        // The regex alone also matches .well-known paths — it's the sibling
+        // `not path /.well-known/*` matcher in the @dot block that excludes
+        // them, not the regex.
+        expect(re.test('/.well-known/security.txt')).toBe(true);
+        // Ordinary paths are never matched.
+        expect(re.test('/index.html')).toBe(false);
     });
 });
 

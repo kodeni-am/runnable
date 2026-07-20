@@ -210,8 +210,11 @@ sudo systemctl restart runnable
 
 A project can install from a private npm registry: set the registry URL, an
 optional scope, and an auth token in the project's settings. The token is
-encrypted at rest and written to a temporary `.npmrc` only for the duration of
-each build.
+encrypted at rest and written to a temporary `.npmrc` that is deleted at the
+end of each build. Note for operators: because the build copies the project
+directory into the image it builds, the token also ends up in Docker's build
+cache and image layers for that build, and persists there until you prune
+them (e.g. `docker buildx prune`) or rotate the token.
 
 ### Rotating JWT_SECRET
 

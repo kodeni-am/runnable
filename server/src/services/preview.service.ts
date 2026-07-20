@@ -81,6 +81,15 @@ export class PreviewService {
             PR_NUMBER: String(pr.number),
         });
 
+        // npmAuthTokenEncrypted is `select: false` — `parent` here comes from
+        // a plain relation join (see webhooks.routes.ts), so the ciphertext
+        // is never on the loaded entity. Fetch it explicitly, the same way
+        // ProcessService.withNpmrc does for a build. The ciphertext copies
+        // verbatim onto the preview: same encryption key, no re-encryption.
+        const registryToken = parent.npmRegistryUrl
+            ? await ProcessService.loadRegistryToken(parent.id)
+            : null;
+
         const preview = await ProjectProvisioningService.provisionCore(
             owner,
             `${parent.name} PR #${pr.number}`,
@@ -100,6 +109,9 @@ export class PreviewService {
                 internalPort: parent.internalPort,
                 notificationWebhookUrl: parent.notificationWebhookUrl,
                 envVars: env,
+                npmRegistryUrl: parent.npmRegistryUrl,
+                npmRegistryScope: parent.npmRegistryScope,
+                npmAuthTokenEncrypted: registryToken ?? undefined,
             },
         );
 

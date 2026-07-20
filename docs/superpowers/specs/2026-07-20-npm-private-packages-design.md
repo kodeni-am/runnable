@@ -7,8 +7,9 @@
 
 Let a project install dependencies from a private npm registry by storing a
 registry URL, an optional scope, and an auth token per project. The token is
-encrypted at rest, never returned by the API, and exists on disk only for the
-duration of a build.
+encrypted at rest, never returned by the API, and the generated `.npmrc` in
+the project directory is deleted at the end of each build. (This does not
+cover every place the token can end up — see "Known limitation" below.)
 
 ## Scope
 
@@ -49,6 +50,28 @@ project directory.
 The cost is a plaintext credential on disk during the build. The design
 compensates with deletion in a `finally` plus three independent containment
 measures (see Containment).
+
+### Known limitation: the token outlives the host copy
+
+The `finally` in `ProcessService.withNpmrc` only deletes the *host* copy of
+`.npmrc` — the one in `project.directoryPath`. But `railpack build .` copies
+the project directory, `.npmrc` included, into the image it builds, and that
+build runs through the shared `runnable-buildkit` container, whose layer
+cache persists across builds. So the token is also written into railpack's
+build layers and BuildKit's cache, and it stays there — readable by anything
+with access to that cache — until those layers are pruned. This is not
+verified against a live BuildKit instance here; it follows directly from
+`railpack build .` copying the directory it's pointed at and BuildKit caching
+layers by default.
+
+This is accepted as a known limitation rather than solved, because the root
+cause is structural: railpack runs its own `npm install` inside the image
+build (see "Why a file on disk" above), which is why a literal file has to
+exist in the directory `railpack build` reads — there is no channel available
+at that step for a secret that doesn't also become part of the build context.
+Operators who need to bound this exposure should periodically prune the
+BuildKit cache (`docker buildx prune` / equivalent for the `runnable-buildkit`
+container) or rotate registry tokens on a schedule.
 
 ## Data model
 

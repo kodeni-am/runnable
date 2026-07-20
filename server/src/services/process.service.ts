@@ -19,7 +19,7 @@ import {
 } from './deployNames';
 import { DeployError, DeployStrategy, HealthGateResult, DeployPhase } from './deployError';
 import { HealthMonitorService } from './healthMonitor.service';
-import { buildNpmrcContent, maskToken } from './npmrc';
+import { buildNpmrcContent, maskToken, NPMRC_SENTINEL } from './npmrc';
 import { decryptSecret } from './crypto.service';
 
 interface ManagedProcess {
@@ -409,10 +409,12 @@ export class ProcessService {
 
     /**
      * Fetch the encrypted registry token. It is a `select: false` column, so
-     * it never arrives on a normally-loaded project — this is the one place
-     * that asks for it, keeping the secret off every other code path.
+     * it never arrives on a normally-loaded project — this is the shared way
+     * to ask for it explicitly, keeping the secret off every other code path.
+     * Also used by `PreviewService` to copy the ciphertext onto preview
+     * projects.
      */
-    private static async loadRegistryToken(projectId: string): Promise<string | null> {
+    static async loadRegistryToken(projectId: string): Promise<string | null> {
         const row = await AppDataSource.getRepository(Project).createQueryBuilder('p')
             .select('p.npmAuthTokenEncrypted', 'token')
             .where('p.id = :id', { id: projectId })
@@ -457,6 +459,18 @@ export class ProcessService {
         const npmrcPath = path.join(project.directoryPath, '.npmrc');
         const backupPath = `${npmrcPath}.runnable-backup`;
 
+        // A file left behind by a build that crashed after the write
+        // (kill -9, host crash) carries our sentinel as its first line — it's
+        // an orphaned token, not a repo-provided file. Remove it outright
+        // instead of backing it up, or it would get "restored" as if it were
+        // real once this build finishes.
+        const isOrphanedGenerated = await fs.readFile(npmrcPath, 'utf-8')
+            .then(content => content.startsWith(NPMRC_SENTINEL))
+            .catch(() => false);
+        if (isOrphanedGenerated) {
+            await fs.rm(npmrcPath, { force: true });
+        }
+
         // Preserve a repo-provided .npmrc rather than clobbering it. Once this
         // rename has happened, everything that can fail (content generation,
         // the write, and the callback itself) must run inside the try below —
@@ -483,9 +497,13 @@ export class ProcessService {
 
             return await fn(token);
         } finally {
-            await fs.rm(npmrcPath, { force: true }).catch(() => { });
+            await fs.rm(npmrcPath, { force: true }).catch(() =>
+                fs.appendFile(buildLogPath, '\nWarning: failed to remove generated .npmrc\n').catch(() => { })
+            );
             if (hadExisting) {
-                await fs.rename(backupPath, npmrcPath).catch(() => { });
+                await fs.rename(backupPath, npmrcPath).catch(() =>
+                    fs.appendFile(buildLogPath, '\nWarning: failed to restore original .npmrc from backup\n').catch(() => { })
+                );
             }
         }
     }

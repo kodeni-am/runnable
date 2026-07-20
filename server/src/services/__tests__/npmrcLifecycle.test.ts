@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { encryptSecret } from '../crypto.service';
 import { ProcessService } from '../process.service';
+import { buildNpmrcContent } from '../npmrc';
 
 let dir: string;
 let logPath: string;
@@ -125,5 +126,28 @@ describe('withNpmrc', () => {
             const stat = await fs.stat(npmrcPath());
             expect(stat.mode & 0o777).toBe(0o644);
         });
+    });
+
+    it('removes an orphaned generated .npmrc left by a crashed build instead of backing it up', async () => {
+        // Simulate a prior build that was killed after writing .npmrc but
+        // before the finally could clean it up: a real generated file, with
+        // the sentinel, just sitting there at the start of this build.
+        const orphan = buildNpmrcContent('https://old-registry.example.com/', null, 'stale-leaked-token');
+        await fs.writeFile(npmrcPath(), orphan, { mode: 0o644 });
+
+        await withNpmrc(configuredProject(), TOKEN_CIPHERTEXT(), async (token) => {
+            // The current build's own .npmrc is in place and unrelated to the
+            // orphan's content — it was not "restored" from it.
+            const during = await fs.readFile(npmrcPath(), 'utf-8');
+            expect(during).not.toContain('stale-leaked-token');
+            expect(during).toContain('_authToken=tok-secret');
+            expect(token).toBe('tok-secret');
+        });
+
+        // Directory is clean afterward: no generated file, and — critically —
+        // no backup file. The orphan must never be treated as "the user's
+        // .npmrc" and restored.
+        expect(await exists(npmrcPath())).toBe(false);
+        expect(await exists(backupPath())).toBe(false);
     });
 });

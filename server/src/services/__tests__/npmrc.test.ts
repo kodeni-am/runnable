@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { buildNpmrcContent, maskToken } from '../npmrc';
+import { buildNpmrcContent, maskToken, NPMRC_SENTINEL } from '../npmrc';
 
 describe('buildNpmrcContent', () => {
+    it('leads with the sentinel line, so a crashed build\'s leftover file is self-identifying', () => {
+        const out = buildNpmrcContent('https://registry.npmjs.org/', null, 'tok123');
+        expect(out.split('\n')[0]).toBe(NPMRC_SENTINEL);
+    });
+
     it('makes the registry the default when no scope is given', () => {
         const out = buildNpmrcContent('https://registry.npmjs.org/', null, 'tok123');
         expect(out).toContain('registry=https://registry.npmjs.org/');
