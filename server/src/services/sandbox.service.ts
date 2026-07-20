@@ -102,7 +102,11 @@ export class SandboxService {
         });
     }
 
-    static async spawn(projectId: string, command: string, args: string[], logPath: string, cwd?: string, env?: NodeJS.ProcessEnv): Promise<number> {
+    /**
+     * @param scrub Optional per-chunk transform applied before the chunk is
+     * written to the log — used to mask credentials in build output.
+     */
+    static async spawn(projectId: string, command: string, args: string[], logPath: string, cwd?: string, env?: NodeJS.ProcessEnv, scrub?: (chunk: string) => string): Promise<number> {
         const baseCommand = path.basename(command);
         if (!ALLOWED_COMMANDS.includes(baseCommand)) {
             throw new Error(`Command not allowed: ${baseCommand}`);
@@ -121,8 +125,9 @@ export class SandboxService {
                     command, ...args], { cwd, env: processEnv })
                 : spawn(command, args, { cwd, env: processEnv });
 
-            child.stdout?.on('data', (data) => logStream.write(data));
-            child.stderr?.on('data', (data) => logStream.write(data));
+            const write = (data: any) => logStream.write(scrub ? scrub(String(data)) : data);
+            child.stdout?.on('data', write);
+            child.stderr?.on('data', write);
 
             child.on('close', (code) => {
                 logStream.end();

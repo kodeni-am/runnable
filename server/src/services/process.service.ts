@@ -19,6 +19,8 @@ import {
 } from './deployNames';
 import { DeployError, DeployStrategy, HealthGateResult, DeployPhase } from './deployError';
 import { HealthMonitorService } from './healthMonitor.service';
+import { buildNpmrcContent, maskToken } from './npmrc';
+import { decryptSecret } from './crypto.service';
 
 interface ManagedProcess {
     process: ChildProcess;
@@ -230,8 +232,10 @@ export class ProcessService {
         buildLogPath: string,
         result: { stdout: string; stderr: string; exitCode: number },
         step: string,
+        scrub?: (text: string) => string,
     ): Promise<void> {
-        const logContent = `\n--- ${step} ---\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}\nEXIT CODE: ${result.exitCode}\n\n`;
+        const raw = `\n--- ${step} ---\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}\nEXIT CODE: ${result.exitCode}\n\n`;
+        const logContent = scrub ? scrub(raw) : raw;
         await fs.appendFile(buildLogPath, logContent);
         if (result.exitCode !== 0) {
             throw new Error(`${step} failed with exit code ${result.exitCode}. See logs for details.`);
@@ -403,6 +407,70 @@ export class ProcessService {
         return actualHostPort;
     }
 
+    /**
+     * Fetch the encrypted registry token. It is a `select: false` column, so
+     * it never arrives on a normally-loaded project — this is the one place
+     * that asks for it, keeping the secret off every other code path.
+     */
+    private static async loadRegistryToken(projectId: string): Promise<string | null> {
+        const row = await AppDataSource.getRepository(Project).createQueryBuilder('p')
+            .select('p.npmAuthTokenEncrypted', 'token')
+            .where('p.id = :id', { id: projectId })
+            .getRawOne();
+        return row?.token || null;
+    }
+
+    /**
+     * Run `fn` with a private-registry `.npmrc` present in the project
+     * directory, then always remove it.
+     *
+     * The file must be real (not an env-var reference): `railpack build` runs
+     * its own npm install inside the image and receives only buildkitEnv, so
+     * `${NPM_TOKEN}` interpolation would be undefined exactly where
+     * dependencies are installed. Both install steps read the project
+     * directory, so a literal file is the one thing that works for both.
+     *
+     * `fn` receives the plaintext token (or null) so callers can mask it in
+     * log output.
+     */
+    private static async withNpmrc<T>(
+        project: Project,
+        encryptedToken: string | null,
+        buildLogPath: string,
+        fn: (token: string | null) => Promise<T>,
+    ): Promise<T> {
+        if (!project.npmRegistryUrl || !encryptedToken) {
+            return fn(null);
+        }
+
+        let token: string;
+        try {
+            token = decryptSecret(encryptedToken);
+        } catch {
+            // Almost always a rotated JWT_SECRET. Say so plainly instead of
+            // letting the build fail later with an opaque registry 401.
+            const message = 'Stored npm registry token could not be decrypted — re-enter it in project settings';
+            await fs.appendFile(buildLogPath, `\n${message}\n`);
+            throw new Error(message);
+        }
+
+        const npmrcPath = path.join(project.directoryPath, '.npmrc');
+        const backupPath = `${npmrcPath}.runnable-backup`;
+
+        // Preserve a repo-provided .npmrc rather than clobbering it.
+        const hadExisting = await fs.rename(npmrcPath, backupPath).then(() => true, () => false);
+        await fs.writeFile(npmrcPath, buildNpmrcContent(project.npmRegistryUrl, project.npmRegistryScope, token), { mode: 0o600 });
+
+        try {
+            return await fn(token);
+        } finally {
+            await fs.rm(npmrcPath, { force: true }).catch(() => { });
+            if (hadExisting) {
+                await fs.rename(backupPath, npmrcPath).catch(() => { });
+            }
+        }
+    }
+
     /** BuildKit ensure + optional build command + Railpack image build (streaming). */
     private static async buildAppImage(
         project: Project,
@@ -431,21 +499,26 @@ export class ProcessService {
             BUILDKIT_HOST: 'docker-container://runnable-buildkit'
         };
 
-        // Run build command (user-provided or auto-detected)
-        if (effectiveBuildCommand) {
-            await fs.appendFile(buildLogPath, `\n--- Build Command: ${effectiveBuildCommand} ---\n`);
-            const buildEnv = { ...buildkitEnv, ...userEnv };
-            const buildResult = await SandboxService.exec(project.id, 'sh', ['-c', effectiveBuildCommand], project.directoryPath, buildEnv);
-            await ProcessService.logAndCheck(buildLogPath, buildResult, 'Build');
-        }
+        const encryptedToken = await ProcessService.loadRegistryToken(project.id);
+        await ProcessService.withNpmrc(project, encryptedToken, buildLogPath, async (npmToken) => {
+            const scrub = npmToken ? (text: string) => maskToken(text, npmToken) : undefined;
 
-        // Build image using railpack (Streaming)
-        await fs.appendFile(buildLogPath, "\n--- Railpack Build (Streaming) ---\n");
-        const buildExitCode = await SandboxService.spawn(project.id, 'railpack', ['build', '.', '--name', imageName], buildLogPath, project.directoryPath, buildkitEnv);
+            // Run build command (user-provided or auto-detected)
+            if (effectiveBuildCommand) {
+                await fs.appendFile(buildLogPath, `\n--- Build Command: ${effectiveBuildCommand} ---\n`);
+                const buildEnv = { ...buildkitEnv, ...userEnv };
+                const buildResult = await SandboxService.exec(project.id, 'sh', ['-c', effectiveBuildCommand], project.directoryPath, buildEnv);
+                await ProcessService.logAndCheck(buildLogPath, buildResult, 'Build', scrub);
+            }
 
-        if (buildExitCode !== 0) {
-            throw new Error(`Railpack build failed with exit code ${buildExitCode}. See logs for details.`);
-        }
+            // Build image using railpack (Streaming)
+            await fs.appendFile(buildLogPath, "\n--- Railpack Build (Streaming) ---\n");
+            const buildExitCode = await SandboxService.spawn(project.id, 'railpack', ['build', '.', '--name', imageName], buildLogPath, project.directoryPath, buildkitEnv, scrub);
+
+            if (buildExitCode !== 0) {
+                throw new Error(`Railpack build failed with exit code ${buildExitCode}. See logs for details.`);
+            }
+        });
     }
 
     /**
