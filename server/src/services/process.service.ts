@@ -457,11 +457,30 @@ export class ProcessService {
         const npmrcPath = path.join(project.directoryPath, '.npmrc');
         const backupPath = `${npmrcPath}.runnable-backup`;
 
-        // Preserve a repo-provided .npmrc rather than clobbering it.
+        // Preserve a repo-provided .npmrc rather than clobbering it. Once this
+        // rename has happened, everything that can fail (content generation,
+        // the write, and the callback itself) must run inside the try below —
+        // otherwise a failure here strands the backup and the user's .npmrc
+        // never comes back.
         const hadExisting = await fs.rename(npmrcPath, backupPath).then(() => true, () => false);
-        await fs.writeFile(npmrcPath, buildNpmrcContent(project.npmRegistryUrl, project.npmRegistryScope, token), { mode: 0o600 });
 
         try {
+            let content: string;
+            try {
+                content = buildNpmrcContent(project.npmRegistryUrl, project.npmRegistryScope, token);
+            } catch {
+                // Almost always a malformed npmRegistryUrl (`new URL()` throws a
+                // raw TypeError). Say so plainly instead of letting the build
+                // fail later with an opaque error.
+                const message = 'Invalid npm registry URL — fix it in project settings';
+                await fs.appendFile(buildLogPath, `\n${message}\n`);
+                throw new Error(message);
+            }
+            // Mode 0644 (not 0600): with SANDBOX_ENABLED, the build command
+            // runs as a different, per-project sandbox user via `sudo -u`, so
+            // the file must be readable by someone other than the writer.
+            await fs.writeFile(npmrcPath, content, { mode: 0o644 });
+
             return await fn(token);
         } finally {
             await fs.rm(npmrcPath, { force: true }).catch(() => { });

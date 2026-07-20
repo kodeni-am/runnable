@@ -107,4 +107,23 @@ describe('withNpmrc', () => {
         expect(log).toMatch(/re-enter it in project settings/i);
         expect(await exists(npmrcPath())).toBe(false);
     });
+
+    it('fails the build with a clear log line and restores any pre-existing .npmrc on a malformed registry URL', async () => {
+        await fs.writeFile(npmrcPath(), 'legacy=true\n');
+        const project = { ...configuredProject(), npmRegistryUrl: 'not-a-url' };
+        await expect(
+            withNpmrc(project, TOKEN_CIPHERTEXT(), async () => { })
+        ).rejects.toThrow(/invalid npm registry url/i);
+        const log = await fs.readFile(logPath, 'utf-8');
+        expect(log).toMatch(/invalid npm registry url/i);
+        expect(await exists(backupPath())).toBe(false);
+        expect(await fs.readFile(npmrcPath(), 'utf-8')).toBe('legacy=true\n');
+    });
+
+    it('writes the generated .npmrc with mode 0o644 so the sandboxed build user can read it', async () => {
+        await withNpmrc(configuredProject(), TOKEN_CIPHERTEXT(), async () => {
+            const stat = await fs.stat(npmrcPath());
+            expect(stat.mode & 0o777).toBe(0o644);
+        });
+    });
 });
