@@ -72,7 +72,7 @@ describe('serializeNpmRegistry', () => {
 
 vi.mock('../services/sandbox.service', () => ({ SandboxService: { exec: vi.fn() } }));
 vi.mock('../services/process.service', () => ({
-    ProcessService: { redeployExclusive: vi.fn(), redeploy: vi.fn(), emitStatus: vi.fn() },
+    ProcessService: { redeployExclusive: vi.fn(), redeploy: vi.fn(), emitStatus: vi.fn(), loadRegistryToken: vi.fn() },
 }));
 vi.mock('../services/healthMonitor.service', () => ({ HealthMonitorService: {} }));
 vi.mock('../services/serverConfig.service', () => ({ ServerConfigService: {} }));
@@ -110,12 +110,12 @@ function makeApp() {
     return app;
 }
 
-let projectRepo: { update: ReturnType<typeof vi.fn> };
+let projectRepo: { update: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
     vi.clearAllMocks();
     currentProject = { id: PROJECT_ID, npmRegistryUrl: undefined, npmRegistryScope: undefined };
-    projectRepo = { update: vi.fn(async () => undefined) };
+    projectRepo = { update: vi.fn(async () => undefined), save: vi.fn(async (p: any) => p) };
     vi.mocked(AppDataSource.getRepository).mockImplementation(() => projectRepo as any);
 });
 
@@ -235,5 +235,58 @@ describe('PUT /:id/npm-registry', () => {
         const serialized = JSON.stringify(res.body);
         expect(serialized).not.toContain(rawToken);
         expect(serialized).not.toContain(payload.npmAuthTokenEncrypted);
+    });
+});
+
+// Regression: a general project-settings save must not wipe the stored
+// registry token. `npmAuthTokenEncrypted` is a select:false column, so it is
+// `undefined` on any normally-loaded project; a bare repo.save(project) writes
+// that undefined column as NULL, silently clearing the token (observed in
+// production: URL stayed set, token went null, feature went inert).
+describe('PUT /:id (general settings) — registry token preservation', () => {
+    it('preserves the stored token across an unrelated settings change', async () => {
+        const { ProcessService } = await import('../services/process.service');
+        vi.mocked(ProcessService.loadRegistryToken).mockResolvedValue('v1.CIPHER.TAG.TEXT');
+        currentProject = {
+            id: PROJECT_ID,
+            directoryPath: '/srv/x',
+            npmRegistryUrl: 'https://npm.pkg.github.com/',
+            npmRegistryScope: '@acme',
+            // npmAuthTokenEncrypted intentionally absent — mirrors a select:false load
+        };
+
+        // Capture the token value at the moment save() runs (the helper strips
+        // it afterwards, so we can't read it off the entity later).
+        let tokenAtSave: any = 'UNSET';
+        projectRepo.save.mockImplementation(async (p: any) => {
+            tokenAtSave = p.npmAuthTokenEncrypted;
+            return p;
+        });
+
+        const res = await request(makeApp())
+            .put(`/api/projects/${PROJECT_ID}`)
+            .send({ autoRestart: true })
+            .expect(200);
+
+        expect(ProcessService.loadRegistryToken).toHaveBeenCalledWith(PROJECT_ID);
+        expect(projectRepo.save).toHaveBeenCalledTimes(1);
+        // The stored ciphertext is written back, not nulled.
+        expect(tokenAtSave).toBe('v1.CIPHER.TAG.TEXT');
+        // ...and it never appears in the response body.
+        expect(JSON.stringify(res.body)).not.toContain('v1.CIPHER.TAG.TEXT');
+        expect(res.body).not.toHaveProperty('npmAuthTokenEncrypted');
+    });
+
+    it('does not choke when the project has no registry token', async () => {
+        const { ProcessService } = await import('../services/process.service');
+        vi.mocked(ProcessService.loadRegistryToken).mockResolvedValue(null);
+        currentProject = { id: PROJECT_ID, directoryPath: '/srv/x', npmRegistryUrl: undefined, npmRegistryScope: undefined };
+
+        await request(makeApp())
+            .put(`/api/projects/${PROJECT_ID}`)
+            .send({ autoRestart: true })
+            .expect(200);
+
+        expect(projectRepo.save).toHaveBeenCalledTimes(1);
     });
 });

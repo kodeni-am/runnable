@@ -67,6 +67,25 @@ export function serializeNpmRegistry(project: Project): { url: string | null; sc
     };
 }
 
+/**
+ * Persist a project entity that was loaded the normal way (without its
+ * `select: false` columns).
+ *
+ * `npmAuthTokenEncrypted` is a `select: false` column, so a normally-loaded
+ * project carries `undefined` for it — and `repo.save(project)` writes that
+ * undefined column as NULL, silently wiping a stored registry token whenever
+ * an unrelated setting is saved. (The `save()`-skips-undefined behaviour the
+ * rest of this file relies on holds for *loaded* columns, not for one that
+ * was never selected.) Reload the ciphertext so the save writes it back
+ * unchanged, then strip it from the in-memory entity so it can never surface
+ * in a `res.json(project)` response.
+ */
+async function saveProjectPreservingRegistryToken(project: Project): Promise<void> {
+    project.npmAuthTokenEncrypted = (await ProcessService.loadRegistryToken(project.id)) ?? undefined;
+    await AppDataSource.getRepository(Project).save(project);
+    delete (project as any).npmAuthTokenEncrypted;
+}
+
 // List user's projects (owned + collaborating)
 router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -331,8 +350,7 @@ router.put('/:id', requireProjectAccess(ProjectPermission.CAN_EDIT_CONFIG), asyn
             throw new AppError('A preview base domain is required to enable PR previews', 400);
         }
 
-        const projectRepo = AppDataSource.getRepository(Project);
-        await projectRepo.save(project);
+        await saveProjectPreservingRegistryToken(project);
         // If previews are enabled and the repo's webhook predates preview
         // support (push only), upgrade it to also receive pull_request events.
         if (project.previewsEnabled && project.githubRepo?.webhookId && req.user!.githubToken) {
@@ -513,8 +531,7 @@ router.post('/:id/reload-proxy', requireProjectAccess(ProjectPermission.CAN_EDIT
         // Save updated config path if changed
         if (project.configPath !== configPath) {
             project.configPath = configPath;
-            const projectRepo = AppDataSource.getRepository(Project);
-            await projectRepo.save(project);
+            await saveProjectPreservingRegistryToken(project);
         }
 
         // Reload the server
