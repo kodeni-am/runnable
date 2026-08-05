@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import { authApi } from '../api/auth';
 import { Github, Mail } from 'lucide-react';
 import { usePageTitle } from '../hooks/usePageTitle';
 
@@ -10,8 +11,18 @@ export default function Register() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    // null while we ask the server whether signup is open.
+    const [isOpen, setIsOpen] = useState<boolean | null>(null);
     const { register, isLoading } = useAuthStore();
     const navigate = useNavigate();
+
+    useEffect(() => {
+        authApi.registrationStatus()
+            .then((res) => setIsOpen(res.data.allowPublicRegistration))
+            // Show the form on error rather than locking out a legitimate
+            // signup; the server rejects it anyway if registration is closed.
+            .catch(() => setIsOpen(true));
+    }, []);
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
@@ -23,6 +34,20 @@ export default function Register() {
             setError(err.response?.data?.error || 'Registration failed');
         }
     };
+
+    if (isOpen === false) {
+        return (
+            <div className="auth-page">
+                <div className="auth-card glass">
+                    <h1 className="gradient-text">Registration closed</h1>
+                    <p>This instance is not accepting new accounts. Ask an administrator for an invite.</p>
+                    <p style={{ textAlign: 'center', marginTop: 24, fontSize: 14 }}>
+                        Already have an account? <Link to="/login" style={{ color: 'var(--accent)' }}>Sign in</Link>
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="auth-page">
@@ -39,11 +64,12 @@ export default function Register() {
                     </div>
                     <div className="form-group">
                         <label>Username</label>
-                        <input type="text" className="form-input" placeholder="johndoe" value={username} onChange={(e) => setUsername(e.target.value)} required />
+                        {/* Mirrors the server rules in validateRegistrationInput */}
+                        <input type="text" className="form-input" placeholder="johndoe" value={username} onChange={(e) => setUsername(e.target.value)} required minLength={3} maxLength={32} pattern="[a-zA-Z0-9]([a-zA-Z0-9_\-]*[a-zA-Z0-9])?" title="3–32 characters: letters, numbers, hyphens and underscores, starting and ending with a letter or number" />
                     </div>
                     <div className="form-group">
                         <label>Password</label>
-                        <input type="password" className="form-input" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
+                        <input type="password" className="form-input" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} maxLength={200} />
                     </div>
                     <button type="submit" className="btn btn-primary btn-full" disabled={isLoading}>
                         {isLoading ? <span className="spinner" /> : 'Create Account'}

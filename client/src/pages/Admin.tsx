@@ -4,7 +4,7 @@ import { adminApi } from '../api/admin';
 import type { UserDTO, UserPermissions } from '../api/admin';
 import { systemApi } from '../api/system';
 import type { BuildCacheInfo } from '../api/system';
-import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings, HardDrive } from 'lucide-react';
+import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings, HardDrive, UserPlus } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
 
@@ -36,7 +36,37 @@ export default function Admin() {
     const [pruning, setPruning] = useState(false);
     const [cacheMessage, setCacheMessage] = useState('');
 
+    // Self-service registration gate
+    const [allowSignup, setAllowSignup] = useState<boolean | null>(null);
+    const [signupSaving, setSignupSaving] = useState(false);
+    const [signupError, setSignupError] = useState('');
+
     const gb = (bytes: number) => (bytes / 1e9).toFixed(2);
+
+    const fetchRegistration = async () => {
+        try {
+            const { data } = await systemApi.getRegistration();
+            setAllowSignup(data.allowPublicRegistration);
+        } catch (err: any) {
+            setSignupError(err.response?.data?.error || 'Failed to load registration setting');
+        }
+    };
+
+    const handleToggleSignup = async (next: boolean) => {
+        const previous = allowSignup;
+        setAllowSignup(next); // optimistic — reverted below if the save fails
+        try {
+            setSignupSaving(true);
+            setSignupError('');
+            const { data } = await systemApi.updateRegistration(next);
+            setAllowSignup(data.allowPublicRegistration);
+        } catch (err: any) {
+            setAllowSignup(previous);
+            setSignupError(err.response?.data?.error || 'Failed to save registration setting');
+        } finally {
+            setSignupSaving(false);
+        }
+    };
 
     // The cap setting loads instantly; the usage measurement can take 30s+
     // on a large cache (docker system df enumerates every entry), so the two
@@ -62,6 +92,7 @@ export default function Admin() {
 
     useEffect(() => {
         fetchUsers();
+        fetchRegistration();
         fetchCapSetting();
         fetchUsage();
     }, []);
@@ -273,6 +304,30 @@ export default function Admin() {
                             </table>
                         </div>
                     )}
+                </div>
+
+                <div className="glass" style={{ padding: 24, borderRadius: 12, marginTop: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                        <UserPlus size={20} className="text-primary" />
+                        <h2 style={{ margin: 0 }}>System — Registration</h2>
+                    </div>
+
+                    {signupError && <div className="alert alert-error">{signupError}</div>}
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <input
+                            type="checkbox"
+                            checked={allowSignup === true}
+                            disabled={allowSignup === null || signupSaving}
+                            onChange={(e) => handleToggleSignup(e.target.checked)}
+                        />
+                        <span>Allow anyone to create an account</span>
+                    </label>
+                    <p style={{ marginTop: 10, marginBottom: 0, color: 'var(--text-secondary)', fontSize: 14 }}>
+                        {allowSignup
+                            ? 'Signup is open — anyone on the internet can register. New accounts still need your approval above before they can do anything.'
+                            : 'Signup is closed. The register page and OAuth sign-in will both refuse to create new accounts.'}
+                    </p>
                 </div>
 
                 <div className="glass" style={{ padding: 24, borderRadius: 12, marginTop: 24 }}>
