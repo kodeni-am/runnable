@@ -5,6 +5,7 @@ import { User, Role } from '../entities';
 import { config } from '../config';
 import { AppError } from '../middleware/errorHandler';
 import { JwtPayload } from '../middleware/auth';
+import { AppSettingsService } from './appSettings.service';
 
 const userRepo = () => AppDataSource.getRepository(User);
 
@@ -12,8 +13,61 @@ const userRepo = () => AppDataSource.getRepository(User);
 // doesn't reveal whether an email is registered.
 const DUMMY_HASH = bcrypt.hashSync('runnable-timing-equalizer', 12);
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Letters/digits at both ends, separators only in between.
+const USERNAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?$/;
+
+/**
+ * Validate and normalize a self-service registration payload.
+ *
+ * The signup form validates in the browser (type=email, minLength), but that
+ * is decoration — anything POSTing straight to /api/auth/register bypasses it
+ * entirely, which is how single-character junk accounts got created. This is
+ * the authoritative check.
+ *
+ * Password registration only: OAuth-provisioned usernames come from the
+ * provider and are not required to satisfy USERNAME_RE.
+ */
+export function validateRegistrationInput(
+    rawEmail: unknown,
+    rawUsername: unknown,
+    rawPassword: unknown,
+): { email: string; username: string; password: string } {
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    // 254 is the practical RFC 5321 ceiling for an address.
+    if (!email || email.length > 254 || !EMAIL_RE.test(email)) {
+        throw new AppError('A valid email address is required', 400);
+    }
+
+    const username = typeof rawUsername === 'string' ? rawUsername.trim() : '';
+    if (username.length < 3 || username.length > 32) {
+        throw new AppError('Username must be between 3 and 32 characters', 400);
+    }
+    if (!USERNAME_RE.test(username)) {
+        throw new AppError(
+            'Username may only contain letters, numbers, hyphens and underscores, and must start and end with a letter or number',
+            400,
+        );
+    }
+
+    const password = typeof rawPassword === 'string' ? rawPassword : '';
+    if (password.length < 8) {
+        throw new AppError('Password must be at least 8 characters', 400);
+    }
+    // Unauthenticated endpoint — never hand bcrypt an unbounded string.
+    if (password.length > 200) {
+        throw new AppError('Password must be at most 200 characters', 400);
+    }
+
+    return { email, username, password };
+}
+
 export class AuthService {
-    static async register(email: string, username: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
+    static async register(rawEmail: string, rawUsername: string, rawPassword: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
+        const { email, username, password } = validateRegistrationInput(rawEmail, rawUsername, rawPassword);
+
+        // Uniqueness is checked against the normalized email, so a casing
+        // variant can no longer slip past into a duplicate account.
         const existing = await userRepo().findOne({ where: [{ email }, { username }] });
         if (existing) {
             throw new AppError('User with this email or username already exists', 409);
@@ -165,6 +219,13 @@ export class AuthService {
                     }
                     await userRepo().save(user);
                 } else {
+                    // No existing account to link — this is a brand-new signup, so
+                    // it is subject to the same gate as the password form. Without
+                    // this, "Sign in with GitHub" would walk straight past it.
+                    if (!(await AppSettingsService.allowsPublicRegistration())) {
+                        throw new AppError('Registration is closed on this instance', 403);
+                    }
+
                     // Create new user
                     let username = profile.username;
                     const existingUsername = await userRepo().findOne({ where: { username } });

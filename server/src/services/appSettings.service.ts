@@ -26,7 +26,13 @@ export class AppSettingsService {
         return row;
     }
 
-    static async update(partial: Partial<Pick<AppSettings, 'buildCacheKeepGB'>>): Promise<AppSettings> {
+    /** Whether strangers may create their own accounts. Defaults closed. */
+    static async allowsPublicRegistration(): Promise<boolean> {
+        const row = await AppSettingsService.get();
+        return row.allowPublicRegistration === true;
+    }
+
+    static async update(partial: Partial<Pick<AppSettings, 'buildCacheKeepGB' | 'allowPublicRegistration'>>): Promise<AppSettings> {
         const repo = settingsRepo();
         const row = await AppSettingsService.get();
         Object.assign(row, partial);

@@ -21,4 +21,10 @@ export class AppSettings {
     // Build-cache GC cap in GB. 0 disables post-deploy enforcement.
     @Column({ default: 10 })
     buildCacheKeepGB: number;
+
+    // Whether strangers may create their own accounts. Off by default: an
+    // open instance collects junk signups from bots crawling the internet.
+    // Accounts still require admin approval either way (see requireApproval).
+    @Column({ default: false })
+    allowPublicRegistration: boolean;
 }

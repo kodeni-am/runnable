@@ -6,6 +6,7 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import rateLimit from 'express-rate-limit';
 import { AuthService } from '../services/auth.service';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { AppSettingsService } from '../services/appSettings.service';
 import { config } from '../config';
 
 const router = Router();
@@ -186,8 +187,22 @@ function clearAuthCookies(res: Response) {
 // --- Route handlers ---
 
 // Register
+// Lets the signup page hide its form when the instance is closed. Public by
+// design — it leaks nothing an attempted registration would not already tell you.
+router.get('/registration-status', async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+        res.json({ allowPublicRegistration: await AppSettingsService.allowsPublicRegistration() });
+    } catch (error) {
+        next(error);
+    }
+});
+
 router.post('/register', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
+        if (!(await AppSettingsService.allowsPublicRegistration())) {
+            res.status(403).json({ error: 'Registration is closed on this instance' });
+            return;
+        }
         const { email, username, password } = req.body;
         if (!email || !username || !password) {
             res.status(400).json({ error: 'Email, username, and password are required' });

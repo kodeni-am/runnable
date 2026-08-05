@@ -178,6 +178,30 @@ router.get('/stats', async (_req, res, next: NextFunction) => {
     }
 });
 
+// ── Self-service registration gate ──
+
+router.get('/registration', async (_req, res, next: NextFunction) => {
+    try {
+        const settings = await AppSettingsService.get();
+        res.json({ allowPublicRegistration: settings.allowPublicRegistration === true });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.put('/registration', async (req, res, next: NextFunction) => {
+    try {
+        const allowPublicRegistration = req.body?.allowPublicRegistration;
+        if (typeof allowPublicRegistration !== 'boolean') {
+            return res.status(400).json({ error: 'allowPublicRegistration must be a boolean' });
+        }
+        const settings = await AppSettingsService.update({ allowPublicRegistration });
+        res.json({ allowPublicRegistration: settings.allowPublicRegistration === true });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // ── Build-cache GC (spec: docs/superpowers/specs/2026-06-11-build-cache-gc-cap-design.md) ──
 
 function buildCacheError(err: any): string {

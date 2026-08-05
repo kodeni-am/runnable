@@ -7,6 +7,8 @@ export interface AuthResponse {
 }
 
 export const authApi = {
+    registrationStatus: () =>
+        api.get<{ allowPublicRegistration: boolean }>('/auth/registration-status'),
     login: (data: LoginData) => api.post<AuthResponse>('/auth/login', data),
     register: (data: RegisterData) => api.post<AuthResponse>('/auth/register', data),
     refresh: () => api.post('/auth/refresh'),

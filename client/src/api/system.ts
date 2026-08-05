@@ -40,6 +40,10 @@ export interface SystemStats {
 
 export const systemApi = {
     stats: () => api.get<SystemStats>('/system/stats'),
+    getRegistration: () =>
+        api.get<{ allowPublicRegistration: boolean }>('/system/registration'),
+    updateRegistration: (allowPublicRegistration: boolean) =>
+        api.put<{ allowPublicRegistration: boolean }>('/system/registration', { allowPublicRegistration }),
     getBuildCache: () => api.get<BuildCacheInfo>('/system/build-cache'),
     getBuildCacheSettings: () => api.get<{ keepGB: number }>('/system/build-cache/settings'),
     updateBuildCache: (keepGB: number) => api.put<{ keepGB: number }>('/system/build-cache', { keepGB }),
