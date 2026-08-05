@@ -8,3 +8,4 @@ server/storage/
 client/dist/
 .gemini/
 .devdata/
+.superpowers/
