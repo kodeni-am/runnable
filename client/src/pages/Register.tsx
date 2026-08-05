@@ -1,9 +1,9 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { authApi } from '../api/auth';
 import { Github, Mail } from 'lucide-react';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useRegistrationOpen } from '../hooks/useRegistrationOpen';
 
 export default function Register() {
     usePageTitle('Register');
@@ -11,18 +11,9 @@ export default function Register() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
-    // null while we ask the server whether signup is open.
-    const [isOpen, setIsOpen] = useState<boolean | null>(null);
+    const isOpen = useRegistrationOpen();
     const { register, isLoading } = useAuthStore();
     const navigate = useNavigate();
-
-    useEffect(() => {
-        authApi.registrationStatus()
-            .then((res) => setIsOpen(res.data.allowPublicRegistration))
-            // Show the form on error rather than locking out a legitimate
-            // signup; the server rejects it anyway if registration is closed.
-            .catch(() => setIsOpen(true));
-    }, []);
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
@@ -34,6 +25,18 @@ export default function Register() {
             setError(err.response?.data?.error || 'Registration failed');
         }
     };
+
+    // Closed is the default, so rendering the form first and swapping it out
+    // would flash a signup form at people who cannot use one.
+    if (isOpen === null) {
+        return (
+            <div className="auth-page">
+                <div className="auth-card glass" style={{ textAlign: 'center' }}>
+                    <span className="spinner" />
+                </div>
+            </div>
+        );
+    }
 
     if (isOpen === false) {
         return (

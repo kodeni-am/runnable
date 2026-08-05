@@ -3,9 +3,11 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { Github, Mail, KeyRound } from 'lucide-react';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useRegistrationOpen } from '../hooks/useRegistrationOpen';
 
 export default function Login() {
     usePageTitle('Login');
+    const registrationOpen = useRegistrationOpen();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [searchParams] = useSearchParams();
@@ -104,9 +106,13 @@ export default function Login() {
                     </button>
                 )}
 
-                <p style={{ textAlign: 'center', marginTop: 24, fontSize: 14 }}>
-                    Don't have an account? <Link to="/register" style={{ color: 'var(--accent)' }}>Sign up</Link>
-                </p>
+                {/* Closed instances hide signup entirely rather than offering a
+                    link to a page that only says no. */}
+                {registrationOpen && (
+                    <p style={{ textAlign: 'center', marginTop: 24, fontSize: 14 }}>
+                        Don't have an account? <Link to="/register" style={{ color: 'var(--accent)' }}>Sign up</Link>
+                    </p>
+                )}
             </div>
         </div>
     );
