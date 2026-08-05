@@ -197,6 +197,13 @@ npm run build
 sudo systemctl restart runnable
 ```
 
+`update.sh` performs the same steps as `deploy.sh` but is driven by the portal's
+self-update button, records progress to `$STATE_DIR/update-state.json`, and
+rolls back to the previous commit if the new revision fails to build or fails
+to come back healthy. Run it by hand only with `--dry-run`; the portal launches
+the real thing in its own systemd unit. See
+`docs/migration-compatibility.md` for the constraint this places on migrations.
+
 ### Script Options
 
 | Flag       | Description                              | Default     |
