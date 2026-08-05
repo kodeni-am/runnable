@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import fs from 'fs/promises';
 import path from 'path';
 import { promisify } from 'util';
 import { config } from '../config';
@@ -29,6 +30,29 @@ export interface UpdateCheckResult {
     checkedAt: string;
     error: string | null;
 }
+
+export interface UpdateState {
+    phase: UpdatePhase;
+    prevCommit: string | null;
+    newCommit: string | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+    error: string | null;
+}
+
+export interface UpdateStatus extends UpdateCheckResult {
+    state: UpdateState;
+}
+
+const IDLE_STATE: UpdateState = {
+    phase: 'idle', prevCommit: null, newCommit: null,
+    startedAt: null, finishedAt: null, error: null,
+};
+
+const ALL_PHASES: UpdatePhase[] = [
+    'idle', 'pulling', 'installing', 'building', 'syncing',
+    'restarting', 'verifying', 'done', 'rolling_back', 'failed', 'failed_rollback',
+];
 
 const CHECK_TTL_MS = 60 * 60 * 1000; // an unforced check reuses a result this fresh
 
@@ -102,5 +126,35 @@ export class UpdateService {
                 error: message,
             };
         }
+    }
+
+    static async readState(): Promise<UpdateState> {
+        let raw: string;
+        try {
+            raw = await fs.readFile(UPDATE_STATE_PATH, 'utf-8');
+        } catch {
+            // No file at all: nothing has ever run. That is idle, not a fault.
+            return { ...IDLE_STATE };
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            if (!ALL_PHASES.includes(parsed?.phase)) throw new Error('unknown phase');
+            return {
+                phase: parsed.phase,
+                prevCommit: parsed.prevCommit ?? null,
+                newCommit: parsed.newCommit ?? null,
+                startedAt: parsed.startedAt ?? null,
+                finishedAt: parsed.finishedAt ?? null,
+                error: parsed.error ?? null,
+            };
+        } catch {
+            // A truncated or garbled file must not strand the UI mid-update.
+            return { ...IDLE_STATE, error: 'Update state file is unreadable' };
+        }
+    }
+
+    static async status(): Promise<UpdateStatus> {
+        const [check, state] = await Promise.all([UpdateService.check(), UpdateService.readState()]);
+        return { ...check, state };
     }
 }

@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const execFileMock = vi.hoisted(() => vi.fn());
 vi.mock('child_process', () => ({ execFile: execFileMock }));
 
+const readFileMock = vi.hoisted(() => vi.fn());
+vi.mock('fs/promises', () => ({ default: { readFile: readFileMock }, readFile: readFileMock }));
+
 vi.mock('../../config', () => ({
     config: { hosting: { servDir: '/var/runnable/projects' } },
 }));
@@ -137,5 +140,65 @@ describe('UpdateService.check', () => {
 
         expect(result.behind).toBe(0);
         expect(result.error).toMatch(/not a git repository/);
+    });
+});
+
+describe('UpdateService.readState', () => {
+    it('reads a well-formed state file', async () => {
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', prevCommit: 'aaa1111', newCommit: 'bbb2222',
+            startedAt: '2026-08-05T10:00:00.000Z', finishedAt: null, error: null,
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('building');
+        expect(state.prevCommit).toBe('aaa1111');
+    });
+
+    // No file means no update has ever run — that is idle, not an error.
+    it('returns idle when the file does not exist', async () => {
+        const err: any = new Error('ENOENT');
+        err.code = 'ENOENT';
+        readFileMock.mockRejectedValue(err);
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('idle');
+        expect(state.error).toBeNull();
+    });
+
+    // A half-written file must not wedge the UI into "an update is running".
+    it('returns idle with an error when the file is corrupt', async () => {
+        readFileMock.mockResolvedValue('{ not json');
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('idle');
+        expect(state.error).toMatch(/unreadable/i);
+    });
+
+    it('rejects an unknown phase rather than trusting it', async () => {
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'wat' }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('idle');
+        expect(state.error).toMatch(/unreadable/i);
+    });
+});
+
+describe('UpdateService.status', () => {
+    it('merges the cached check with the on-disk state', async () => {
+        queueExec([{ stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' }]);
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'done', prevCommit: 'aaa0000', newCommit: 'aaa1111',
+            startedAt: '2026-08-05T10:00:00.000Z', finishedAt: '2026-08-05T10:02:00.000Z', error: null,
+        }));
+
+        const status = await UpdateService.status();
+
+        expect(status.behind).toBe(1);
+        expect(status.state.phase).toBe('done');
     });
 });
