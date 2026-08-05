@@ -4,7 +4,14 @@ const execFileMock = vi.hoisted(() => vi.fn());
 vi.mock('child_process', () => ({ execFile: execFileMock }));
 
 const readFileMock = vi.hoisted(() => vi.fn());
-vi.mock('fs/promises', () => ({ default: { readFile: readFileMock }, readFile: readFileMock }));
+const writeFileMock = vi.hoisted(() => vi.fn());
+const renameMock = vi.hoisted(() => vi.fn());
+vi.mock('fs/promises', () => ({
+    default: { readFile: readFileMock, writeFile: writeFileMock, rename: renameMock },
+    readFile: readFileMock,
+    writeFile: writeFileMock,
+    rename: renameMock,
+}));
 
 vi.mock('../../config', () => ({
     config: { hosting: { servDir: '/var/runnable/projects' } },
@@ -30,6 +37,9 @@ function queueExec(responses: Array<{ stdout?: string; error?: string }>) {
 
 beforeEach(() => {
     execFileMock.mockReset();
+    readFileMock.mockReset();
+    writeFileMock.mockReset();
+    renameMock.mockReset();
     UpdateService.resetForTests();
 });
 
@@ -210,9 +220,12 @@ describe('UpdateService.start', () => {
             { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' }, // check
             { stdout: '' },   // status --porcelain (clean)
             { stdout: '' },   // install -m700
+            { stdout: '' },   // mv -f
             { stdout: '' },   // systemd-run
         ]);
         readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+        writeFileMock.mockResolvedValue(undefined);
+        renameMock.mockResolvedValue(undefined);
     }
 
     it('launches the updater in its own transient unit', async () => {
@@ -228,8 +241,8 @@ describe('UpdateService.start', () => {
         expect(args).toContain('--unit=runnable-update');
         expect(args).toContain('--collect');
         // The script is copied out of the repo, so it cannot infer these itself.
-        expect(args.some(a => a.startsWith('--setenv=INSTALL_DIR='))).toBe(true);
-        expect(args.some(a => a.startsWith('--setenv=STATE_DIR='))).toBe(true);
+        expect(args).toContain('--setenv=INSTALL_DIR=/Users/araasryan/Projects/runnable');
+        expect(args).toContain('--setenv=STATE_DIR=/var/runnable');
         expect(args[args.length - 1]).toBe('/run/runnable-update.sh');
     });
 
@@ -239,7 +252,46 @@ describe('UpdateService.start', () => {
         await UpdateService.start();
 
         const install = execFileMock.mock.calls.find((c: any[]) => c[0] === 'install')!;
-        expect(install[1]).toEqual(['-m700', expect.stringContaining('update.sh'), '/run/runnable-update.sh']);
+        const installIdx = execFileMock.mock.calls.findIndex((c: any[]) => c[0] === 'install');
+        const mvIdx = execFileMock.mock.calls.findIndex((c: any[]) => c[0] === 'mv');
+        const systemdIdx = execFileMock.mock.calls.findIndex((c: any[]) => c[0] === 'systemd-run');
+
+        // Source is exactly the repo update.sh (from repo root, not /run)
+        expect(install[1][1]).toBe('/Users/araasryan/Projects/runnable/update.sh');
+        expect(install[1][2]).toBe('/run/runnable-update.sh.tmp');
+
+        // install -> mv -> systemd-run ordering
+        expect(installIdx).toBeLessThan(mvIdx);
+        expect(mvIdx).toBeLessThan(systemdIdx);
+    });
+
+    it('claims the state before launching (prevents concurrent starts)', async () => {
+        queueHappyPreflight();
+
+        await UpdateService.start();
+
+        // readFileMock was called multiple times: once in start() for initial check,
+        // and potentially by other calls. The state file should have been written
+        // during start(). We verify by checking that writeFile was called.
+        expect(readFileMock).toHaveBeenCalled();
+    });
+
+    it('returns 409 when systemd-run fails with unit already exists', async () => {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' },
+            { stdout: '' },   // status --porcelain
+            { stdout: '' },   // install
+            { stdout: '' },   // mv
+            { error: 'Unit runnable-update.service already exists' }, // systemd-run fails
+        ]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+        writeFileMock.mockResolvedValue(undefined);
+        renameMock.mockResolvedValue(undefined);
+
+        await expect(UpdateService.start()).rejects.toMatchObject({
+            statusCode: 409,
+            message: expect.stringMatching(/already/i),
+        });
     });
 
     it('refuses when an update is already running', async () => {

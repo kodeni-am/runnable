@@ -184,22 +184,48 @@ export class UpdateService {
             throw new AppError('Already up to date', 400);
         }
 
+        // Atomically claim the update before launching, so no concurrent start() can pass all gates.
+        const claimedState: UpdateState = {
+            phase: 'pulling',
+            prevCommit: check.current,
+            newCommit: null,
+            startedAt: new Date().toISOString(),
+            finishedAt: null,
+            error: null,
+        };
+        const tmpPath = `${UPDATE_STATE_PATH}.tmp`;
+        await fs.writeFile(tmpPath, JSON.stringify(claimedState, null, 2), 'utf-8');
+        await fs.rename(tmpPath, UPDATE_STATE_PATH);
+
         // Copy the script out of the repo: `git pull` rewrites update.sh, and
         // bash reads a script incrementally by byte offset, so rewriting it
         // mid-run causes arbitrary misexecution.
+        const tmpScript = `${UPDATE_SCRIPT_RUNTIME_PATH}.tmp`;
         await execFileAsync('install', [
-            '-m700', path.join(REPO_ROOT, 'update.sh'), UPDATE_SCRIPT_RUNTIME_PATH,
+            '-m700', path.join(REPO_ROOT, 'update.sh'), tmpScript,
         ], {});
+
+        // Atomically move the script into place.
+        await execFileAsync('mv', ['-f', tmpScript, UPDATE_SCRIPT_RUNTIME_PATH], {});
 
         // Its own transient unit, outside this service's cgroup, so
         // `systemctl restart runnable` partway through does not kill it.
         // The copied script cannot infer the repo location, so pass it.
-        await execFileAsync('systemd-run', [
-            '--unit=runnable-update',
-            '--collect',
-            `--setenv=INSTALL_DIR=${REPO_ROOT}`,
-            `--setenv=STATE_DIR=${STATE_DIR}`,
-            UPDATE_SCRIPT_RUNTIME_PATH,
-        ], {});
+        try {
+            await execFileAsync('systemd-run', [
+                '--unit=runnable-update',
+                '--collect',
+                `--setenv=INSTALL_DIR=${REPO_ROOT}`,
+                `--setenv=STATE_DIR=${STATE_DIR}`,
+                UPDATE_SCRIPT_RUNTIME_PATH,
+            ], {});
+        } catch (err: any) {
+            const stderr = err?.stderr || '';
+            const message = err?.message || '';
+            if (/already exists/i.test(stderr) || /already exists/i.test(message)) {
+                throw new AppError('An update is already in progress', 409);
+            }
+            throw new AppError(`Failed to start update: ${stderr || message}`, 500);
+        }
     }
 }
