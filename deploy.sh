@@ -23,8 +23,12 @@ DEPLOY_URL=${DEPLOY_URL:-${BASE_DOMAIN:+https://$BASE_DOMAIN}}
 echo "==> git pull"
 git pull --ff-only
 
-echo "==> npm install (in case deps changed)"
-npm install
+# `npm ci` installs exactly what package-lock.json pins and refuses to rewrite
+# it, so a deploy can never silently pull a newer (possibly compromised)
+# release. --ignore-scripts is belt-and-braces: .npmrc already sets it, but the
+# flag still holds if that file is ever missing on the server.
+echo "==> npm ci (locked, no install scripts)"
+npm ci --ignore-scripts
 
 echo "==> build (client + server)"
 npm run build

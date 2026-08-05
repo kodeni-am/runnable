@@ -87,7 +87,7 @@ const STATIC_RUNNABLE_ENV_KEYS = [
     'GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GITHUB_CALLBACK_URL',
     'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL',
     'CADDY_CONFIG_DIR', 'CADDY_ADMIN_API',
-    'SANDBOX_ENABLED', 'SANDBOX_USER_PREFIX',
+    'SANDBOX_ENABLED', 'SANDBOX_USER_PREFIX', 'SANDBOX_ALLOW_UNSAFE',
 ];
 
 // Also strip every key actually present in our .env file — that catches any
@@ -103,9 +103,41 @@ function readEnvFileKeys(): string[] {
 
 export const RUNNABLE_OWNED_ENV_KEYS = new Set<string>([...STATIC_RUNNABLE_ENV_KEYS, ...readEnvFileKeys()]);
 
+/**
+ * Guard the one security control that fails open.
+ *
+ * SANDBOX_ENABLED is opt-in (`=== 'true'`), so a missing, misspelled, or
+ * hand-edited .env silently drops user builds from the unprivileged
+ * per-project user down to the server's own identity — which systemd runs as
+ * root. A project's `npm install` then executes every dependency's postinstall
+ * hook as root, next to .env, the stored GitHub OAuth tokens, and the
+ * encrypted registry tokens. In production that is a boot-blocking
+ * misconfiguration, not a warning.
+ *
+ * Returns null when the configuration is acceptable.
+ */
+export function sandboxConfigError(env: {
+    nodeEnv: string;
+    sandboxEnabled: boolean;
+    allowUnsafe: boolean;
+}): string | null {
+    if (env.nodeEnv !== 'production') return null;
+    if (env.sandboxEnabled || env.allowUnsafe) return null;
+    return 'SANDBOX_ENABLED must be "true" in production — without it, user project builds run as root. ' +
+        'Set SANDBOX_ENABLED=true, or set SANDBOX_ALLOW_UNSAFE=true to accept the risk deliberately.';
+}
+
 // --- Production safety checks ---
 if (config.nodeEnv === 'production') {
     const errors: string[] = [];
+
+    const sandboxError = sandboxConfigError({
+        nodeEnv: config.nodeEnv,
+        sandboxEnabled: config.sandbox.enabled,
+        allowUnsafe: process.env.SANDBOX_ALLOW_UNSAFE === 'true',
+    });
+    if (sandboxError) errors.push(sandboxError);
+
     // Reject the publicly-known placeholder values from .env.example, not just
     // absence — a copied example file must never pass with forgeable tokens.
     const JWT_PLACEHOLDERS = ['change_this_to_a_random_secret_key', 'change_this_to_another_random_secret_key', 'dev-secret-change-me', 'dev-refresh-secret-change-me'];

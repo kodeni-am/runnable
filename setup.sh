@@ -83,11 +83,13 @@ apt-get install -y -qq \
 ok "System packages installed"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. NODE.JS 20 LTS
+# 2. NODE.JS 24 LTS
 # ══════════════════════════════════════════════════════════════════════════════
-log "Installing Node.js 20 LTS..."
-if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d v) -lt 20 ]]; then
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+# Node 24 binaries need glibc 2.28+ (Ubuntu 20.04+ / Debian 10+). Older hosts
+# must stay on 20 — the app itself runs fine on either.
+log "Installing Node.js 24 LTS..."
+if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d v) -lt 24 ]]; then
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
     apt-get install -y -qq nodejs
 fi
 ok "Node.js $(node -v) installed"
