@@ -197,21 +197,21 @@ export class UpdateService {
         await fs.writeFile(tmpPath, JSON.stringify(claimedState, null, 2), 'utf-8');
         await fs.rename(tmpPath, UPDATE_STATE_PATH);
 
-        // Copy the script out of the repo: `git pull` rewrites update.sh, and
-        // bash reads a script incrementally by byte offset, so rewriting it
-        // mid-run causes arbitrary misexecution.
-        const tmpScript = `${UPDATE_SCRIPT_RUNTIME_PATH}.tmp`;
-        await execFileAsync('install', [
-            '-m700', path.join(REPO_ROOT, 'update.sh'), tmpScript,
-        ], {});
-
-        // Atomically move the script into place.
-        await execFileAsync('mv', ['-f', tmpScript, UPDATE_SCRIPT_RUNTIME_PATH], {});
-
-        // Its own transient unit, outside this service's cgroup, so
-        // `systemctl restart runnable` partway through does not kill it.
-        // The copied script cannot infer the repo location, so pass it.
         try {
+            // Copy the script out of the repo: `git pull` rewrites update.sh, and
+            // bash reads a script incrementally by byte offset, so rewriting it
+            // mid-run causes arbitrary misexecution.
+            const tmpScript = `${UPDATE_SCRIPT_RUNTIME_PATH}.tmp`;
+            await execFileAsync('install', [
+                '-m700', path.join(REPO_ROOT, 'update.sh'), tmpScript,
+            ], {});
+
+            // Atomically move the script into place.
+            await execFileAsync('mv', ['-f', tmpScript, UPDATE_SCRIPT_RUNTIME_PATH], {});
+
+            // Its own transient unit, outside this service's cgroup, so
+            // `systemctl restart runnable` partway through does not kill it.
+            // The copied script cannot infer the repo location, so pass it.
             await execFileAsync('systemd-run', [
                 '--unit=runnable-update',
                 '--collect',
@@ -222,9 +222,22 @@ export class UpdateService {
         } catch (err: any) {
             const stderr = err?.stderr || '';
             const message = err?.message || '';
+            // If another updater's unit exists, don't touch our claim; another process owns it.
             if (/already exists/i.test(stderr) || /already exists/i.test(message)) {
                 throw new AppError('An update is already in progress', 409);
             }
+            // Any other failure: revert the claim so the next start() can retry.
+            const failedState: UpdateState = {
+                phase: 'failed',
+                prevCommit: check.current,
+                newCommit: null,
+                startedAt: claimedState.startedAt,
+                finishedAt: new Date().toISOString(),
+                error: stderr || message || 'Launch failed',
+            };
+            const failTmpPath = `${UPDATE_STATE_PATH}.tmp`;
+            await fs.writeFile(failTmpPath, JSON.stringify(failedState, null, 2), 'utf-8');
+            await fs.rename(failTmpPath, UPDATE_STATE_PATH);
             throw new AppError(`Failed to start update: ${stderr || message}`, 500);
         }
     }

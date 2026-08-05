@@ -17,7 +17,8 @@ vi.mock('../../config', () => ({
     config: { hosting: { servDir: '/var/runnable/projects' } },
 }));
 
-import { parseCommitLog, UpdateService } from '../update.service';
+import path from 'path';
+import { parseCommitLog, UpdateService, REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH } from '../update.service';
 
 // promisify(execFile) calls execFile(file, args, opts, cb). Resolve or reject
 // per queued response so tests can drive a whole command sequence.
@@ -241,8 +242,8 @@ describe('UpdateService.start', () => {
         expect(args).toContain('--unit=runnable-update');
         expect(args).toContain('--collect');
         // The script is copied out of the repo, so it cannot infer these itself.
-        expect(args).toContain('--setenv=INSTALL_DIR=/Users/araasryan/Projects/runnable');
-        expect(args).toContain('--setenv=STATE_DIR=/var/runnable');
+        expect(args).toContain(`--setenv=INSTALL_DIR=${REPO_ROOT}`);
+        expect(args).toContain(`--setenv=STATE_DIR=${STATE_DIR}`);
         expect(args[args.length - 1]).toBe('/run/runnable-update.sh');
     });
 
@@ -257,7 +258,7 @@ describe('UpdateService.start', () => {
         const systemdIdx = execFileMock.mock.calls.findIndex((c: any[]) => c[0] === 'systemd-run');
 
         // Source is exactly the repo update.sh (from repo root, not /run)
-        expect(install[1][1]).toBe('/Users/araasryan/Projects/runnable/update.sh');
+        expect(install[1][1]).toBe(path.join(REPO_ROOT, 'update.sh'));
         expect(install[1][2]).toBe('/run/runnable-update.sh.tmp');
 
         // install -> mv -> systemd-run ordering
@@ -270,10 +271,24 @@ describe('UpdateService.start', () => {
 
         await UpdateService.start();
 
-        // readFileMock was called multiple times: once in start() for initial check,
-        // and potentially by other calls. The state file should have been written
-        // during start(). We verify by checking that writeFile was called.
-        expect(readFileMock).toHaveBeenCalled();
+        // Verify state file is claimed: writeFile called with .tmp, content has phase: pulling
+        const writeCall = writeFileMock.mock.calls.find((c: any[]) => c[0].endsWith('.tmp'));
+        expect(writeCall).toBeDefined();
+        expect(writeCall![0]).toBe(`${UPDATE_STATE_PATH}.tmp`);
+        const writtenContent = JSON.parse(writeCall![1]);
+        expect(writtenContent.phase).toBe('pulling');
+        expect(writtenContent.prevCommit).toBe('aaa1111');
+
+        // Verify rename to final path
+        const renameCall = renameMock.mock.calls.find((c: any[]) => c[1] === UPDATE_STATE_PATH);
+        expect(renameCall).toBeDefined();
+        expect(renameCall![0]).toBe(`${UPDATE_STATE_PATH}.tmp`);
+
+        // Verify state claim happens before systemd-run
+        const writeIdx = writeFileMock.mock.invocationCallOrder[0];
+        const systemdIdx = execFileMock.mock.calls.findIndex((c: any[]) => c[0] === 'systemd-run');
+        const systemdCallOrder = execFileMock.mock.invocationCallOrder[systemdIdx];
+        expect(writeIdx).toBeLessThan(systemdCallOrder);
     });
 
     it('returns 409 when systemd-run fails with unit already exists', async () => {
@@ -292,6 +307,57 @@ describe('UpdateService.start', () => {
             statusCode: 409,
             message: expect.stringMatching(/already/i),
         });
+    });
+
+    it('does not touch state when unit already exists (another updater owns it)', async () => {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' },
+            { stdout: '' },   // status --porcelain
+            { stdout: '' },   // install
+            { stdout: '' },   // mv
+            { error: 'Unit runnable-update.service already exists' }, // systemd-run fails
+        ]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+        writeFileMock.mockResolvedValue(undefined);
+        renameMock.mockResolvedValue(undefined);
+
+        try {
+            await UpdateService.start();
+        } catch {
+            // Expected to throw
+        }
+
+        // Count write/rename calls: one for claim, none for error handling
+        const writeCalls = writeFileMock.mock.calls.length;
+        const renameCalls = renameMock.mock.calls.length;
+        expect(writeCalls).toBe(1); // Only the initial claim
+        expect(renameCalls).toBe(1); // Only the initial claim
+    });
+
+    it('reverts state to failed when launch fails (non-collision)', async () => {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' },
+            { stdout: '' },   // status --porcelain
+            { stdout: '' },   // install
+            { error: 'Permission denied' }, // mv fails
+        ]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+        writeFileMock.mockResolvedValue(undefined);
+        renameMock.mockResolvedValue(undefined);
+
+        await expect(UpdateService.start()).rejects.toMatchObject({
+            statusCode: 500,
+            message: expect.stringMatching(/Permission denied/),
+        });
+
+        // Verify state was reverted to failed: should have 2 writes (claim + revert)
+        const writeCalls = writeFileMock.mock.calls;
+        expect(writeCalls.length).toBe(2);
+
+        const revertedContent = JSON.parse(writeCalls[1][1]);
+        expect(revertedContent.phase).toBe('failed');
+        expect(revertedContent.error).toMatch(/Permission denied/);
+        expect(revertedContent.finishedAt).toBeDefined();
     });
 
     it('refuses when an update is already running', async () => {
