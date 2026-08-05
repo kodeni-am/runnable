@@ -202,3 +202,92 @@ describe('UpdateService.status', () => {
         expect(status.state.phase).toBe('done');
     });
 });
+
+describe('UpdateService.start', () => {
+    // Happy path: clean tree, 1 behind, nothing running.
+    function queueHappyPreflight() {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' }, // check
+            { stdout: '' },   // status --porcelain (clean)
+            { stdout: '' },   // install -m700
+            { stdout: '' },   // systemd-run
+        ]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+    }
+
+    it('launches the updater in its own transient unit', async () => {
+        queueHappyPreflight();
+
+        await UpdateService.start();
+
+        const files = execFileMock.mock.calls.map((c: any[]) => c[0]);
+        expect(files).toContain('systemd-run');
+
+        const run = execFileMock.mock.calls.find((c: any[]) => c[0] === 'systemd-run')!;
+        const args: string[] = run[1];
+        expect(args).toContain('--unit=runnable-update');
+        expect(args).toContain('--collect');
+        // The script is copied out of the repo, so it cannot infer these itself.
+        expect(args.some(a => a.startsWith('--setenv=INSTALL_DIR='))).toBe(true);
+        expect(args.some(a => a.startsWith('--setenv=STATE_DIR='))).toBe(true);
+        expect(args[args.length - 1]).toBe('/run/runnable-update.sh');
+    });
+
+    it('copies the script out of the repo before running it', async () => {
+        queueHappyPreflight();
+
+        await UpdateService.start();
+
+        const install = execFileMock.mock.calls.find((c: any[]) => c[0] === 'install')!;
+        expect(install[1]).toEqual(['-m700', expect.stringContaining('update.sh'), '/run/runnable-update.sh']);
+    });
+
+    it('refuses when an update is already running', async () => {
+        queueExec([{ stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' }]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'building' }));
+
+        await expect(UpdateService.start()).rejects.toMatchObject({
+            statusCode: 409,
+            message: expect.stringMatching(/already/i),
+        });
+    });
+
+    it('refuses when the working tree is dirty', async () => {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' },
+            { stdout: ' M server/src/index.ts\n' },
+        ]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+
+        await expect(UpdateService.start()).rejects.toMatchObject({
+            statusCode: 409,
+            message: expect.stringMatching(/uncommitted/i),
+        });
+    });
+
+    it('refuses when there is nothing to update', async () => {
+        queueExec([{ stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '0\n' }, { stdout: '' }]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+
+        await expect(UpdateService.start()).rejects.toMatchObject({
+            statusCode: 400,
+            message: expect.stringMatching(/already up to date/i),
+        });
+    });
+
+    it('refuses when the check itself failed', async () => {
+        queueExec([{ error: 'not a git repository' }]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+
+        await expect(UpdateService.start()).rejects.toMatchObject({ statusCode: 409 });
+    });
+
+    it('does not launch anything when preflight refuses', async () => {
+        queueExec([{ stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '0\n' }, { stdout: '' }]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+
+        await expect(UpdateService.start()).rejects.toThrow();
+
+        expect(execFileMock.mock.calls.map((c: any[]) => c[0])).not.toContain('systemd-run');
+    });
+});

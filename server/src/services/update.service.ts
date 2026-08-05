@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { promisify } from 'util';
 import { config } from '../config';
+import { AppError } from '../middleware/errorHandler';
 
 const execFileAsync = promisify(execFile);
 
@@ -12,6 +13,8 @@ export const REPO_ROOT = path.resolve(__dirname, '../../..');
 export const STATE_DIR = path.resolve(config.hosting.servDir, '..');
 export const UPDATE_LOG_PATH = path.join(STATE_DIR, 'update.log');
 export const UPDATE_STATE_PATH = path.join(STATE_DIR, 'update-state.json');
+/** The updater is copied here so `git pull` cannot rewrite a running script. */
+export const UPDATE_SCRIPT_RUNTIME_PATH = '/run/runnable-update.sh';
 
 export type UpdatePhase =
     | 'idle' | 'pulling' | 'installing' | 'building' | 'syncing'
@@ -156,5 +159,47 @@ export class UpdateService {
     static async status(): Promise<UpdateStatus> {
         const [check, state] = await Promise.all([UpdateService.check(), UpdateService.readState()]);
         return { ...check, state };
+    }
+
+    static async start(): Promise<void> {
+        const [check, state] = await Promise.all([
+            UpdateService.check(true),
+            UpdateService.readState(),
+        ]);
+
+        if (!TERMINAL_PHASES.includes(state.phase)) {
+            throw new AppError('An update is already in progress', 409);
+        }
+        if (check.error) {
+            throw new AppError(`Cannot check for updates: ${check.error}`, 409);
+        }
+        const dirty = (await git(['status', '--porcelain'])).trim();
+        if (dirty) {
+            throw new AppError(
+                'The installation has uncommitted changes — refusing to update. Resolve them on the server first.',
+                409,
+            );
+        }
+        if (check.behind === 0) {
+            throw new AppError('Already up to date', 400);
+        }
+
+        // Copy the script out of the repo: `git pull` rewrites update.sh, and
+        // bash reads a script incrementally by byte offset, so rewriting it
+        // mid-run causes arbitrary misexecution.
+        await execFileAsync('install', [
+            '-m700', path.join(REPO_ROOT, 'update.sh'), UPDATE_SCRIPT_RUNTIME_PATH,
+        ], {});
+
+        // Its own transient unit, outside this service's cgroup, so
+        // `systemctl restart runnable` partway through does not kill it.
+        // The copied script cannot infer the repo location, so pass it.
+        await execFileAsync('systemd-run', [
+            '--unit=runnable-update',
+            '--collect',
+            `--setenv=INSTALL_DIR=${REPO_ROOT}`,
+            `--setenv=STATE_DIR=${STATE_DIR}`,
+            UPDATE_SCRIPT_RUNTIME_PATH,
+        ], {});
     }
 }
