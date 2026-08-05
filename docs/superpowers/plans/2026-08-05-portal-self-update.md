@@ -484,6 +484,16 @@ git commit -m "feat: read update state file with corrupt-file tolerance"
 
 ### Task 3: Preflight and triggering the updater
 
+> **AMENDED 2026-08-05 during execution, with the plan author's approval.**
+> Review found the code below is racy. As shipped (commits `bac89c3`,
+> `64afd65`, `dd369de`), `start()` additionally: writes an atomic `pulling`
+> claim (temp + `rename`) after preflight and before launch; copies the script
+> via a temp path plus `mv -f` instead of writing the destination in place;
+> maps a `systemd-run` unit collision to a 409 while leaving the state file
+> untouched; and reverts the claim to `failed` on any other launch failure.
+> The code block below is the original, superseded version — read
+> `server/src/services/update.service.ts` for what actually shipped.
+
 **Files:**
 - Modify: `server/src/services/update.service.ts`
 - Test: `server/src/services/__tests__/update.service.test.ts`

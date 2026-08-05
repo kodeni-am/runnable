@@ -102,7 +102,24 @@ and runs the copy.
   several. A failed fetch surfaces the error but **leaves the previous cached
   result intact**, with its original timestamp — stale-but-true beats blank.
 - `status()` — merges the cached check with the on-disk state file.
-- `start()` — preflight, then trigger. Never performs the update itself.
+- `start()` — preflight, claim, then trigger. Never performs the update itself.
+
+  **Amended 2026-08-05 after review.** The original design checked the phase and
+  then launched, which was a time-of-check/time-of-use snapshot: the state file
+  is written only by the spawned script, so between `start()` returning and the
+  updater's first write, `readState()` still reported a terminal phase and a
+  second caller passed every gate. `start()` now:
+
+  1. writes an atomic `phase: 'pulling'` claim (temp file + `rename`) after
+     preflight passes and before launching, so the window closes;
+  2. copies the script via a temp path plus `rename` rather than writing the
+     destination in place, so a second launch cannot truncate a script a
+     running bash is still reading by byte offset;
+  3. maps a `systemd-run` unit collision to a 409 and **leaves the state file
+     untouched** on that path — the collision means another updater owns the
+     claim, and overwriting it would report `failed` during a live update;
+  4. reverts the claim to `phase: 'failed'` on any other launch failure, so a
+     failed launch cannot wedge the instance at `pulling` forever.
 - Hourly timer following the existing `HealthMonitorService.setInterval`
   pattern, started from `bootstrap()`.
 
