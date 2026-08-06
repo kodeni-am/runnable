@@ -5,6 +5,7 @@ dist/
 .DS_Store
 coverage/
 server/storage/
+storage/
 client/dist/
 .gemini/
 .devdata/

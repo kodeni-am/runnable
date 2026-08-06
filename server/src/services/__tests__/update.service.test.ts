@@ -152,6 +152,30 @@ describe('UpdateService.check', () => {
         expect(result.behind).toBe(0);
         expect(result.error).toMatch(/not a git repository/);
     });
+
+    // A forced check (e.g. "Check now") that fails must not be the only place
+    // the failure is visible — an unforced GET /api/system/update polled later
+    // (with origin still unreachable) must keep reporting it too, otherwise an
+    // admin can believe checking is healthy for weeks while it silently fails.
+    it('keeps reporting a persistent fetch failure on a later unforced check', async () => {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '2\n' }, { stdout: 'bbb2222 feat: x' },
+        ]);
+        await UpdateService.check();
+
+        queueExec([{ error: 'could not resolve host github.com' }]);
+        const forced = await UpdateService.check(true);
+        expect(forced.error).toMatch(/could not resolve host/);
+        const callsBeforeUnforced = execFileMock.mock.calls.length;
+
+        const unforced = await UpdateService.check();
+
+        expect(unforced.error).toMatch(/could not resolve host/);
+        expect(unforced.behind).toBe(2);       // stale but true
+        expect(unforced.commits).toHaveLength(1);
+        // No extra git calls — the unforced call must be served from cache.
+        expect(execFileMock.mock.calls.length).toBe(callsBeforeUnforced);
+    });
 });
 
 describe('UpdateService.readState', () => {
@@ -335,6 +359,9 @@ describe('UpdateService.start', () => {
         const args: string[] = run[1];
         expect(args).toContain('--unit=runnable-update');
         expect(args).toContain('--collect');
+        // Must be capped at STALE_CLAIM_MS so a hung unit can never outlive
+        // the staleness window (otherwise start() would relaunch on top of it).
+        expect(args).toContain(`--property=RuntimeMaxSec=${STALE_CLAIM_MS / 1000}`);
         // The script is copied out of the repo, so it cannot infer these itself.
         expect(args).toContain(`--setenv=INSTALL_DIR=${REPO_ROOT}`);
         expect(args).toContain(`--setenv=STATE_DIR=${STATE_DIR}`);
@@ -510,6 +537,33 @@ describe('UpdateService.start', () => {
             statusCode: 409,
             message: expect.stringMatching(/uncommitted/i),
         });
+
+        // The preflight must ignore untracked files (-uno) — only a tracked-file
+        // change is a real "uncommitted changes" refusal.
+        const statusCall = execFileMock.mock.calls.find((c: any[]) => c[0] === 'git' && c[1][0] === 'status');
+        expect(statusCall![1]).toEqual(['status', '--porcelain', '-uno']);
+    });
+
+    // An orphaned untracked file (e.g. a failed upload under ./storage/, which
+    // is not gitignored the way server/storage/ is) must not permanently
+    // disable self-update. `git status --porcelain -uno` reports nothing for
+    // untracked-only trees, so the preflight must let the update proceed.
+    it('does not refuse when only untracked files are present', async () => {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' }, // check
+            { stdout: '' },   // status --porcelain -uno (untracked files ignored -> clean)
+            { stdout: '' },   // install -m700
+            { stdout: '' },   // mv -f
+            { stdout: '' },   // systemd-run
+        ]);
+        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'done' }));
+        writeFileMock.mockResolvedValue(undefined);
+        renameMock.mockResolvedValue(undefined);
+
+        await expect(UpdateService.start()).resolves.toBeUndefined();
+
+        const files = execFileMock.mock.calls.map((c: any[]) => c[0]);
+        expect(files).toContain('systemd-run');
     });
 
     it('refuses when there is nothing to update', async () => {

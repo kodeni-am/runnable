@@ -92,18 +92,28 @@ export class UpdateService {
     private static cached: UpdateCheckResult | null = null;
     private static inFlight: Promise<UpdateCheckResult> | null = null;
     private static timer: NodeJS.Timeout | null = null;
+    // Tracked separately from `cached` because a failed check must not
+    // overwrite the last known-good data — but it must still surface on
+    // every subsequent unforced call, not just the one that hit the error.
+    private static lastCheckError: string | null = null;
 
     /** Test seam — clears memoised state between cases. */
     static resetForTests(): void {
         UpdateService.cached = null;
         UpdateService.inFlight = null;
+        UpdateService.lastCheckError = null;
         UpdateService.stopPolling();
     }
 
     static async check(force = false): Promise<UpdateCheckResult> {
         const cached = UpdateService.cached;
         if (!force && cached && Date.now() - Date.parse(cached.checkedAt) < CHECK_TTL_MS) {
-            return cached;
+            // A persistent fetch failure (e.g. origin unreachable for weeks)
+            // must stay visible to an unforced GET /api/system/update, not
+            // just to whoever happened to click "Check now" when it failed.
+            return UpdateService.lastCheckError
+                ? { ...cached, error: UpdateService.lastCheckError }
+                : cached;
         }
         // Concurrent callers (timer + admin clicking "Check now") share one fetch.
         if (UpdateService.inFlight) return UpdateService.inFlight;
@@ -128,9 +138,11 @@ export class UpdateService {
                 error: null,
             };
             UpdateService.cached = result;
+            UpdateService.lastCheckError = null;
             return result;
         } catch (err: any) {
             const message = String(err?.stderr || err?.message || 'git check failed').trim();
+            UpdateService.lastCheckError = message;
             // A network blip must not destroy a known-good answer. Keep the old
             // data and its original timestamp; surface the error alongside.
             if (UpdateService.cached) {
@@ -224,7 +236,13 @@ export class UpdateService {
         if (check.error) {
             throw new AppError(`Cannot check for updates: ${check.error}`, 409);
         }
-        const dirty = (await git(['status', '--porcelain'])).trim();
+        // -uno: ignore untracked files. `git pull --ff-only` succeeds fine with
+        // untracked files present (it only fails if an incoming commit would
+        // overwrite one, and update.sh's abort() already handles that case
+        // safely with the tree unchanged). Without -uno, a single orphaned
+        // upload under ./storage/ (untracked, since only server/storage/ is
+        // gitignored) would refuse every future update forever.
+        const dirty = (await git(['status', '--porcelain', '-uno'])).trim();
         if (dirty) {
             throw new AppError(
                 'The installation has uncommitted changes — refusing to update. Resolve them on the server first.',
@@ -266,6 +284,14 @@ export class UpdateService {
             await execFileAsync('systemd-run', [
                 '--unit=runnable-update',
                 '--collect',
+                // Must never exceed STALE_CLAIM_MS: --collect only reaps a unit
+                // once it goes inactive/failed, not one stuck ACTIVE (e.g. `npm
+                // ci` hanging on a stalled registry). Without a cap, readState()
+                // would declare the claim stale and let start() write a fresh
+                // claim while the old unit is still running, so the next launch
+                // collides with "already exists" forever. Derived from the same
+                // constant so the two can never drift apart.
+                `--property=RuntimeMaxSec=${STALE_CLAIM_MS / 1000}`,
                 `--setenv=INSTALL_DIR=${REPO_ROOT}`,
                 `--setenv=STATE_DIR=${STATE_DIR}`,
                 // The API's port is configurable; the launcher must pass it

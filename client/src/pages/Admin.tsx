@@ -407,7 +407,7 @@ export default function Admin() {
                             )}
                             {update.state.phase === 'failed' && (
                                 <div className="alert alert-error">
-                                    Update failed and was rolled back to {update.state.prevCommit}: {update.state.error}
+                                    Update failed: {update.state.error}
                                 </div>
                             )}
                             {update.state.phase === 'failed_rollback' && (
