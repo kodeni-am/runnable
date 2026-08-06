@@ -59,6 +59,16 @@ const ALL_PHASES: UpdatePhase[] = [
 
 const CHECK_TTL_MS = 60 * 60 * 1000; // an unforced check reuses a result this fresh
 
+// No process can trap SIGKILL, so an OOM kill, a power loss, or a script that
+// dies before its first write (e.g. /run mounted noexec) can leave a
+// non-terminal phase on disk forever. A legitimate update runs `npm ci`, a
+// full build, a service restart and up to 60s of health polling, which can
+// take many minutes on a small VPS. Declaring a live update dead is worse
+// than waiting, because it would let a second updater launch on top of the
+// first. Sixty minutes is far beyond any real update while still letting the
+// instance heal itself without SSH.
+export const STALE_CLAIM_MS = 60 * 60 * 1000;
+
 /** `git log --pretty=format:%h %s` output -> commits. */
 export function parseCommitLog(stdout: string): UpdateCommit[] {
     return stdout
@@ -142,7 +152,7 @@ export class UpdateService {
         try {
             const parsed = JSON.parse(raw);
             if (!ALL_PHASES.includes(parsed?.phase)) throw new Error('unknown phase');
-            return {
+            const state: UpdateState = {
                 phase: parsed.phase,
                 prevCommit: parsed.prevCommit ?? null,
                 newCommit: parsed.newCommit ?? null,
@@ -150,6 +160,25 @@ export class UpdateService {
                 finishedAt: parsed.finishedAt ?? null,
                 error: parsed.error ?? null,
             };
+
+            // Terminal phases are never rewritten, however old — a finished
+            // update stays finished. Only a non-terminal claim can go stale.
+            if (!TERMINAL_PHASES.includes(state.phase)) {
+                const startedMs = state.startedAt ? Date.parse(state.startedAt) : NaN;
+                // A missing or unparseable startedAt can't be aged, so treat it
+                // as stale too — an unmeasurable claim must not be able to
+                // wedge the instance.
+                const isStale = Number.isNaN(startedMs) || (Date.now() - startedMs) > STALE_CLAIM_MS;
+                if (isStale) {
+                    return {
+                        ...state,
+                        phase: 'failed',
+                        error: 'The updater stopped reporting progress and is presumed dead.',
+                    };
+                }
+            }
+
+            return state;
         } catch {
             // A truncated or garbled file must not strand the UI mid-update.
             return { ...IDLE_STATE, error: 'Update state file is unreadable' };

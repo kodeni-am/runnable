@@ -18,7 +18,7 @@ vi.mock('../../config', () => ({
 }));
 
 import path from 'path';
-import { parseCommitLog, UpdateService, REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH } from '../update.service';
+import { parseCommitLog, UpdateService, REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH, STALE_CLAIM_MS } from '../update.service';
 
 // promisify(execFile) calls execFile(file, args, opts, cb). Resolve or reject
 // per queued response so tests can drive a whole command sequence.
@@ -158,7 +158,7 @@ describe('UpdateService.readState', () => {
     it('reads a well-formed state file', async () => {
         readFileMock.mockResolvedValue(JSON.stringify({
             phase: 'building', prevCommit: 'aaa1111', newCommit: 'bbb2222',
-            startedAt: '2026-08-05T10:00:00.000Z', finishedAt: null, error: null,
+            startedAt: new Date(Date.now() - 60 * 1000).toISOString(), finishedAt: null, error: null,
         }));
 
         const state = await UpdateService.readState();
@@ -196,6 +196,100 @@ describe('UpdateService.readState', () => {
 
         expect(state.phase).toBe('idle');
         expect(state.error).toMatch(/unreadable/i);
+    });
+
+    // A killed updater (SIGKILL, OOM, power loss) can never trap and write a
+    // terminal phase. Past STALE_CLAIM_MS, a non-terminal claim must be
+    // declared dead so start() can proceed without someone SSHing in.
+    it('reports a stale non-terminal claim as failed', async () => {
+        const startedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', prevCommit: 'aaa1111', newCommit: 'bbb2222',
+            startedAt, finishedAt: null, error: null,
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('failed');
+        expect(state.error).toMatch(/stopped reporting/i);
+        // readState must stay a pure read — the updater may still own the file.
+        expect(writeFileMock).not.toHaveBeenCalled();
+        expect(renameMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves prevCommit and newCommit on a stale claim', async () => {
+        const startedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', prevCommit: 'aaa1111', newCommit: 'bbb2222',
+            startedAt, finishedAt: null, error: null,
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.prevCommit).toBe('aaa1111');
+        expect(state.newCommit).toBe('bbb2222');
+    });
+
+    it('leaves a recent non-terminal claim untouched — a running update must not be declared dead', async () => {
+        const startedAt = new Date(Date.now() - 60 * 1000).toISOString();
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', prevCommit: 'aaa1111', newCommit: 'bbb2222',
+            startedAt, finishedAt: null, error: null,
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('building');
+    });
+
+    it('treats a missing startedAt on a non-terminal phase as stale', async () => {
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', prevCommit: 'aaa1111', newCommit: 'bbb2222',
+            startedAt: null, finishedAt: null, error: null,
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('failed');
+    });
+
+    it('treats an unparseable startedAt on a non-terminal phase as stale', async () => {
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', prevCommit: 'aaa1111', newCommit: 'bbb2222',
+            startedAt: 'not-a-date', finishedAt: null, error: null,
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('failed');
+    });
+
+    it('never rewrites an old terminal "done" phase — a finished update stays finished', async () => {
+        const startedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'done', prevCommit: 'aaa1111', newCommit: 'bbb2222',
+            startedAt, finishedAt: startedAt, error: null,
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('done');
+    });
+
+    it('never rewrites an old terminal "failed" phase', async () => {
+        const startedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'failed', prevCommit: 'aaa1111', newCommit: null,
+            startedAt, finishedAt: startedAt, error: 'boom',
+        }));
+
+        const state = await UpdateService.readState();
+
+        expect(state.phase).toBe('failed');
+    });
+
+    it('exports the stale-claim threshold as 60 minutes', () => {
+        expect(STALE_CLAIM_MS).toBe(60 * 60 * 1000);
     });
 });
 
@@ -363,7 +457,9 @@ describe('UpdateService.start', () => {
 
     it('refuses when an update is already running', async () => {
         queueExec([{ stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' }]);
-        readFileMock.mockResolvedValue(JSON.stringify({ phase: 'building' }));
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', startedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+        }));
 
         await expect(UpdateService.start()).rejects.toMatchObject({
             statusCode: 409,
