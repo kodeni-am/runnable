@@ -1,13 +1,14 @@
 import { Router, NextFunction } from 'express';
 import os from 'os';
 import { execFile } from 'child_process';
-import { readFile } from 'fs/promises';
+import fs from 'fs/promises';
 import { promisify } from 'util';
 import { authenticate, requireRole } from '../middleware/auth';
 import { Role } from '../entities';
 import { config } from '../config';
 import { BuildCacheService } from '../services/buildCache.service';
 import { AppSettingsService } from '../services/appSettings.service';
+import { UpdateService, UPDATE_LOG_PATH } from '../services/update.service';
 
 const execFileAsync = promisify(execFile);
 
@@ -173,6 +174,46 @@ router.get('/stats', async (_req, res, next: NextFunction) => {
             network,
             timestamp: new Date().toISOString(),
         });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── Self-update ──
+
+router.get('/update', async (_req, res, next: NextFunction) => {
+    try {
+        res.json(await UpdateService.status());
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Bypasses the hourly cache so an urgent update does not wait for the timer.
+router.post('/update/check', async (_req, res, next: NextFunction) => {
+    try {
+        await UpdateService.check(true);
+        res.json(await UpdateService.status());
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/update', async (_req, res, next: NextFunction) => {
+    try {
+        await UpdateService.start();
+        // 202: the updater runs in its own unit and outlives this request —
+        // and this process is about to be restarted by it.
+        res.status(202).json(await UpdateService.status());
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.get('/update/log', async (_req, res, next: NextFunction) => {
+    try {
+        const log = await fs.readFile(UPDATE_LOG_PATH, 'utf-8').catch(() => '');
+        res.json({ log });
     } catch (error) {
         next(error);
     }
