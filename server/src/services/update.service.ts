@@ -58,6 +58,7 @@ const ALL_PHASES: UpdatePhase[] = [
 ];
 
 const CHECK_TTL_MS = 60 * 60 * 1000; // an unforced check reuses a result this fresh
+const POLL_INTERVAL_MS = 60 * 60 * 1000;
 
 // No process can trap SIGKILL, so an OOM kill, a power loss, or a script that
 // dies before its first write (e.g. /run mounted noexec) can leave a
@@ -90,11 +91,13 @@ function git(args: string[]): Promise<string> {
 export class UpdateService {
     private static cached: UpdateCheckResult | null = null;
     private static inFlight: Promise<UpdateCheckResult> | null = null;
+    private static timer: NodeJS.Timeout | null = null;
 
     /** Test seam — clears memoised state between cases. */
     static resetForTests(): void {
         UpdateService.cached = null;
         UpdateService.inFlight = null;
+        UpdateService.stopPolling();
     }
 
     static async check(force = false): Promise<UpdateCheckResult> {
@@ -188,6 +191,25 @@ export class UpdateService {
     static async status(): Promise<UpdateStatus> {
         const [check, state] = await Promise.all([UpdateService.check(), UpdateService.readState()]);
         return { ...check, state };
+    }
+
+    static startPolling(): void {
+        if (UpdateService.timer) return;
+        UpdateService.timer = setInterval(() => {
+            UpdateService.check(true).catch(err =>
+                console.error('Update check failed:', err?.message || err)
+            );
+        }, POLL_INTERVAL_MS);
+        // Never keep the process alive just for this.
+        UpdateService.timer.unref?.();
+        console.log('⬆️  Update checker started (interval: 60m)');
+    }
+
+    static stopPolling(): void {
+        if (UpdateService.timer) {
+            clearInterval(UpdateService.timer);
+            UpdateService.timer = null;
+        }
     }
 
     static async start(): Promise<void> {

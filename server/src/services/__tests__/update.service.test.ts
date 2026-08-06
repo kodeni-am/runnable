@@ -538,3 +538,31 @@ describe('UpdateService.start', () => {
         expect(execFileMock.mock.calls.map((c: any[]) => c[0])).not.toContain('systemd-run');
     });
 });
+
+describe('UpdateService polling', () => {
+    it('checks on the hour and can be stopped', async () => {
+        vi.useFakeTimers();
+        queueExec(Array(12).fill({ stdout: '0\n' }));
+
+        UpdateService.startPolling();
+        await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+        const afterOne = execFileMock.mock.calls.length;
+        UpdateService.stopPolling();
+        await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+        expect(afterOne).toBeGreaterThan(0);
+        expect(execFileMock.mock.calls.length).toBe(afterOne);
+        vi.useRealTimers();
+    });
+
+    it('is idempotent — calling start twice does not double the timer', () => {
+        vi.useFakeTimers();
+
+        UpdateService.startPolling();
+        UpdateService.startPolling();
+        UpdateService.stopPolling();
+
+        expect(vi.getTimerCount()).toBe(0);
+        vi.useRealTimers();
+    });
+});

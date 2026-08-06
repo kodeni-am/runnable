@@ -15,6 +15,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { ProcessService } from './services/process.service';
 import { HealthMonitorService } from './services/healthMonitor.service';
 import { SandboxService } from './services/sandbox.service';
+import { UpdateService } from './services/update.service';
 import { User } from './entities/User';
 import { Project } from './entities/Project';
 import { ProjectCollaborator } from './entities/ProjectCollaborator';
@@ -252,6 +253,7 @@ async function bootstrap() {
 
     // Watch running app containers; notifies + optionally restarts on crash
     HealthMonitorService.start();
+    UpdateService.startPolling();
 
     // Graceful shutdown
     const shutdown = async () => {
