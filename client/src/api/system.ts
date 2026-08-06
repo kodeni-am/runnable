@@ -38,6 +38,24 @@ export interface SystemStats {
     timestamp: string;
 }
 
+export interface UpdateCommit { sha: string; subject: string; }
+
+export interface UpdateStatus {
+    current: string;
+    behind: number;
+    commits: UpdateCommit[];
+    checkedAt: string;
+    error: string | null;
+    state: {
+        phase: string;
+        prevCommit: string | null;
+        newCommit: string | null;
+        startedAt: string | null;
+        finishedAt: string | null;
+        error: string | null;
+    };
+}
+
 export const systemApi = {
     stats: () => api.get<SystemStats>('/system/stats'),
     getRegistration: () =>
@@ -48,4 +66,8 @@ export const systemApi = {
     getBuildCacheSettings: () => api.get<{ keepGB: number }>('/system/build-cache/settings'),
     updateBuildCache: (keepGB: number) => api.put<{ keepGB: number }>('/system/build-cache', { keepGB }),
     pruneBuildCache: () => api.post<{ freedBytes: number }>('/system/build-cache/prune'),
+    getUpdate: () => api.get<UpdateStatus>('/system/update'),
+    checkUpdate: () => api.post<UpdateStatus>('/system/update/check'),
+    startUpdate: () => api.post<UpdateStatus>('/system/update'),
+    getUpdateLog: () => api.get<{ log: string }>('/system/update/log'),
 };

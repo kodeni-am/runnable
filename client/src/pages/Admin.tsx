@@ -3,8 +3,8 @@ import Layout from '../components/Layout';
 import { adminApi } from '../api/admin';
 import type { UserDTO, UserPermissions } from '../api/admin';
 import { systemApi } from '../api/system';
-import type { BuildCacheInfo } from '../api/system';
-import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings, HardDrive, UserPlus } from 'lucide-react';
+import type { BuildCacheInfo, UpdateStatus } from '../api/system';
+import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings, HardDrive, UserPlus, RefreshCw, Download } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
 
@@ -14,6 +14,8 @@ const DEFAULT_PERMISSIONS: UserPermissions = {
     canUseCustomDomains: true,
     allowedServerTypes: null,
 };
+
+const RUNNING_PHASES = ['pulling', 'installing', 'building', 'syncing', 'restarting', 'verifying', 'rolling_back'];
 
 export default function Admin() {
     usePageTitle('Admin');
@@ -41,6 +43,13 @@ export default function Admin() {
     const [signupSaving, setSignupSaving] = useState(false);
     const [signupError, setSignupError] = useState('');
 
+    // Self-update
+    const [update, setUpdate] = useState<UpdateStatus | null>(null);
+    const [updateLog, setUpdateLog] = useState('');
+    const [checking, setChecking] = useState(false);
+    const [starting, setStarting] = useState(false);
+    const [updateError, setUpdateError] = useState('');
+
     const gb = (bytes: number) => (bytes / 1e9).toFixed(2);
 
     const fetchRegistration = async () => {
@@ -49,6 +58,40 @@ export default function Admin() {
             setAllowSignup(data.allowPublicRegistration);
         } catch (err: any) {
             setSignupError(err.response?.data?.error || 'Failed to load registration setting');
+        }
+    };
+
+    const fetchUpdate = async () => {
+        try {
+            const { data } = await systemApi.getUpdate();
+            setUpdate(data);
+        } catch (err: any) {
+            setUpdateError(err.response?.data?.error || 'Failed to load update status');
+        }
+    };
+
+    const handleCheckUpdate = async () => {
+        try {
+            setChecking(true);
+            setUpdateError('');
+            const { data } = await systemApi.checkUpdate();
+            setUpdate(data);
+        } catch (err: any) {
+            setUpdateError(err.response?.data?.error || 'Check failed');
+        } finally {
+            setChecking(false);
+        }
+    };
+
+    const handleStartUpdate = async () => {
+        try {
+            setStarting(true);
+            setUpdateError('');
+            const { data } = await systemApi.startUpdate();
+            setUpdate(data);
+        } catch (err: any) {
+            setUpdateError(err.response?.data?.error || 'Could not start the update');
+            setStarting(false);
         }
     };
 
@@ -95,7 +138,24 @@ export default function Admin() {
         fetchRegistration();
         fetchCapSetting();
         fetchUsage();
+        fetchUpdate();
     }, []);
+
+    // While an update runs the API restarts, so requests will fail for a
+    // stretch. That is expected — keep polling rather than surfacing it as an
+    // error, and stop only once the phase is terminal.
+    useEffect(() => {
+        const phase = update?.state.phase;
+        if (!phase || !RUNNING_PHASES.includes(phase)) {
+            setStarting(false);
+            return;
+        }
+        const timer = setInterval(() => {
+            systemApi.getUpdate().then(({ data }) => setUpdate(data)).catch(() => { });
+            systemApi.getUpdateLog().then(({ data }) => setUpdateLog(data.log)).catch(() => { });
+        }, 2000);
+        return () => clearInterval(timer);
+    }, [update?.state.phase]);
 
     const fetchUsers = async () => {
         try {
@@ -303,6 +363,81 @@ export default function Admin() {
                                 </tbody>
                             </table>
                         </div>
+                    )}
+                </div>
+
+                <div className="glass" style={{ padding: 24, borderRadius: 12, marginTop: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                        <Download size={20} className="text-primary" />
+                        <h2 style={{ margin: 0 }}>System — Updates</h2>
+                        {update && update.behind > 0 && (
+                            <span className="badge" style={{ background: 'var(--accent)', color: '#fff', padding: '2px 8px', borderRadius: 999, fontSize: 12 }}>
+                                {update.behind} available
+                            </span>
+                        )}
+                    </div>
+
+                    {updateError && <div className="alert alert-error">{updateError}</div>}
+                    {update?.error && <div className="alert alert-error">Last check failed: {update.error}</div>}
+
+                    {update ? (
+                        <>
+                            <p style={{ marginBottom: 12 }}>
+                                Running <strong>{update.current || 'unknown'}</strong>
+                                {update.checkedAt && (
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
+                                        {' '}· checked {new Date(update.checkedAt).toLocaleString()}
+                                    </span>
+                                )}
+                            </p>
+
+                            {update.behind > 0 && (
+                                <ul style={{ marginBottom: 16, paddingLeft: 20, color: 'var(--text-secondary)', fontSize: 14 }}>
+                                    {update.commits.map(c => (
+                                        <li key={c.sha}><code>{c.sha}</code> {c.subject}</li>
+                                    ))}
+                                </ul>
+                            )}
+
+                            {RUNNING_PHASES.includes(update.state.phase) && (
+                                <div className="alert alert-info">
+                                    Updating — phase: <strong>{update.state.phase}</strong>. The portal will be
+                                    briefly unavailable while the service restarts.
+                                </div>
+                            )}
+                            {update.state.phase === 'failed' && (
+                                <div className="alert alert-error">
+                                    Update failed and was rolled back to {update.state.prevCommit}: {update.state.error}
+                                </div>
+                            )}
+                            {update.state.phase === 'failed_rollback' && (
+                                <div className="alert alert-error">
+                                    Update failed AND rollback failed: {update.state.error}. This instance needs
+                                    attention on the server.
+                                </div>
+                            )}
+
+                            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                                <button className="btn btn-secondary" onClick={handleCheckUpdate} disabled={checking}>
+                                    <RefreshCw size={16} /> {checking ? 'Checking…' : 'Check now'}
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleStartUpdate}
+                                    disabled={starting || update.behind === 0 || RUNNING_PHASES.includes(update.state.phase)}
+                                >
+                                    {starting ? 'Starting…' : 'Update now'}
+                                </button>
+                            </div>
+
+                            {updateLog && (
+                                <pre style={{ marginTop: 16, maxHeight: 260, overflow: 'auto', fontSize: 12, background: 'rgba(0,0,0,0.3)', padding: 12, borderRadius: 8 }}>
+                                    {updateLog}
+                                </pre>
+                            )}
+                        </>
+                    ) : !updateError && (
+                        <p style={{ color: 'var(--text-secondary)' }}>Loading update status…</p>
                     )}
                 </div>
 
