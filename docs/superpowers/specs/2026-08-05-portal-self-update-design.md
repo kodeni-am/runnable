@@ -144,6 +144,22 @@ Durable, outside the repo, following the existing build-log convention
 They must live outside the repo: `git reset --hard` during rollback would
 otherwise delete the log that explains why the rollback happened.
 
+**Stale claims (added 2026-08-05 during execution).** `update.sh` installs an
+EXIT trap that writes a terminal phase on abnormal termination, but no process
+can trap `SIGKILL` — an OOM kill, a power loss, or a script that dies before
+its first write (say `/run` mounted `noexec`) still strands a non-terminal
+phase. Since `start()` refuses on any non-terminal phase, that would wedge the
+instance permanently, recoverable only by deleting the state file over SSH.
+`readState()` therefore treats a non-terminal claim older than
+`STALE_CLAIM_MS` (60 minutes) as `failed`, so the instance heals itself. A
+missing or unparseable `startedAt` on a non-terminal phase counts as stale —
+an unmeasurable claim must not be able to wedge anything. Terminal phases are
+never rewritten by age, and `readState` stays a pure read: repairing the file
+here would race an updater that may still own it.
+
+Sixty minutes is deliberately generous. Declaring a live update dead is worse
+than waiting, because it would let a second updater launch on top of the first.
+
 ### 4. API (`server/src/routes/system.routes.ts`, already admin-gated)
 
 | Method | Path | Purpose |
