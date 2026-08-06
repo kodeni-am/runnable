@@ -200,8 +200,11 @@ sudo systemctl restart runnable
 `update.sh` performs the same steps as `deploy.sh` but is driven by the portal's
 self-update button, records progress to `$STATE_DIR/update-state.json`, and
 rolls back to the previous commit if the new revision fails to build or fails
-to come back healthy. Run it by hand only with `--dry-run`; the portal launches
-the real thing in its own systemd unit. See
+to come back healthy. Run it by hand only with `--dry-run`, and point
+`STATE_DIR` at a scratch directory when you do — `--dry-run` still refuses to
+touch the real state file or log, but a scratch directory keeps a hand test
+from being confused with the portal's own run. The portal launches the real
+thing in its own systemd unit. See
 `docs/migration-compatibility.md` for the constraint this places on migrations.
 
 ### Script Options

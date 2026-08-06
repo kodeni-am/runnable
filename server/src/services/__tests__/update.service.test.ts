@@ -14,7 +14,7 @@ vi.mock('fs/promises', () => ({
 }));
 
 vi.mock('../../config', () => ({
-    config: { hosting: { servDir: '/var/runnable/projects' } },
+    config: { port: 3001, hosting: { servDir: '/var/runnable/projects' } },
 }));
 
 import path from 'path';
@@ -244,6 +244,7 @@ describe('UpdateService.start', () => {
         // The script is copied out of the repo, so it cannot infer these itself.
         expect(args).toContain(`--setenv=INSTALL_DIR=${REPO_ROOT}`);
         expect(args).toContain(`--setenv=STATE_DIR=${STATE_DIR}`);
+        expect(args).toContain('--setenv=HEALTH_URL=http://127.0.0.1:3001/api/health');
         expect(args[args.length - 1]).toBe('/run/runnable-update.sh');
     });
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runnable self-update, launched by UpdateService.start via:
 #   systemd-run --unit=runnable-update --collect \
-#     --setenv=INSTALL_DIR=... --setenv=STATE_DIR=... /run/runnable-update.sh
+#     --setenv=INSTALL_DIR=... --setenv=STATE_DIR=... --setenv=HEALTH_URL=... \
+#     /run/runnable-update.sh
 #
 # Runs in its own transient systemd unit so that `systemctl restart runnable`
 # partway through does not kill it. Never run this from inside the API process.
@@ -18,7 +19,9 @@ DRY_RUN=0
 
 LOG="$STATE_DIR/update.log"
 STATE="$STATE_DIR/update-state.json"
-HEALTH_URL=${HEALTH_URL:-http://localhost:3001/api/health}
+# Fallback for hand-running only; the launcher always passes HEALTH_URL
+# explicitly so this instance's configured port is used.
+HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:3001/api/health}
 VERIFY_TIMEOUT=${VERIFY_TIMEOUT:-60}
 
 mkdir -p "$STATE_DIR"
@@ -30,15 +33,40 @@ STARTED_AT=$(date -Iseconds)
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
+# Escapes a string for embedding in a JSON string literal. Order matters:
+# backslashes must be escaped first, or a later step's own backslashes would
+# get double-escaped. Remaining control characters (anything not already
+# turned into \n/\r/\t) are stripped outright rather than left to corrupt
+# the document.
+json_escape() {
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\t'/\\t}
+    s=$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\037')
+    printf '%s' "$s"
+}
+
 # Written atomically: the API reads this file concurrently and must never see
-# a half-written document.
+# a half-written document. In dry-run mode the real state file is never
+# touched at all — the JSON that would have been written is logged instead,
+# so pointing --dry-run at a live STATE_DIR cannot mask (or clobber) a
+# genuinely in-progress update.
 write_state() {
     local phase=$1 error=${2:-null} finished=${3:-null}
     local new_json="null"
     [ -n "$NEW" ] && new_json="\"$NEW\""
-    [ "$error" != "null" ] && error="\"${error//\"/\\\"}\""
+    [ "$error" != "null" ] && error="\"$(json_escape "$error")\""
     [ "$finished" != "null" ] && finished="\"$finished\""
-    cat > "$STATE.tmp" <<JSON
+
+    if [ "$DRY_RUN" = 1 ]; then
+        log "DRY RUN: would write state: {\"phase\":\"$phase\",\"prevCommit\":\"$PREV\",\"newCommit\":$new_json,\"startedAt\":\"$STARTED_AT\",\"finishedAt\":$finished,\"error\":$error}"
+        return 0
+    fi
+
+    if cat > "$STATE.tmp" <<JSON
 {
   "phase": "$phase",
   "prevCommit": "$PREV",
@@ -48,8 +76,20 @@ write_state() {
   "error": $error
 }
 JSON
-    mv "$STATE.tmp" "$STATE"
+    then
+        mv "$STATE.tmp" "$STATE" || log "STATE WRITE FAILED: could not move $STATE.tmp to $STATE" >&2
+    else
+        log "STATE WRITE FAILED: could not write $STATE.tmp (disk full? read-only STATE_DIR?)" >&2
+    fi
 }
+
+# Safety net for abnormal termination (reboot, OOM kill, SIGTERM) partway
+# through a long step like npm ci/npm run build: without this, a non-terminal
+# phase (installing/building/...) is left on disk forever and the API 409s
+# every later attempt with no way to recover short of SSH. Every intentional
+# exit below clears this with `trap - EXIT` first so it can't overwrite the
+# real outcome.
+trap 'write_state failed "updater terminated unexpectedly" "$(date -Iseconds)"' EXIT
 
 run() {
     if [ "$DRY_RUN" = 1 ]; then
@@ -82,6 +122,18 @@ build_and_restart() {
     return 0
 }
 
+# Failure before any local state changed (currently: only a failed `git pull
+# --ff-only`). The working tree is untouched, so there is nothing to roll
+# back — resetting/rebuilding/restarting here would just restart a healthy
+# production service for no reason.
+abort() {
+    local reason=$1
+    log "FAILED: $reason — working tree unchanged, nothing to roll back"
+    trap - EXIT
+    write_state failed "$reason" "$(date -Iseconds)"
+    exit 1
+}
+
 rollback() {
     local reason=$1
     log "FAILED: $reason — rolling back to $PREV"
@@ -89,31 +141,37 @@ rollback() {
 
     if ! run git reset --hard "$PREV"; then
         log "ROLLBACK FAILED: could not reset to $PREV"
-        write_state failed_rollback "Rollback failed: could not reset to $PREV" "$(date -Iseconds)"
+        trap - EXIT
+        write_state failed_rollback "$reason; rollback failed: could not reset to $PREV" "$(date -Iseconds)"
         exit 1
     fi
     if ! build_and_restart; then
         log "ROLLBACK FAILED: previous revision no longer builds"
-        write_state failed_rollback "Rollback failed: previous revision no longer builds" "$(date -Iseconds)"
+        trap - EXIT
+        write_state failed_rollback "$reason; rollback failed: previous revision no longer builds" "$(date -Iseconds)"
         exit 1
     fi
     # Deliberately no retry loop: this path runs when something is already
     # wrong, so it stays dumb and predictable.
     if ! wait_healthy; then
         log "ROLLBACK FAILED: service unhealthy after rollback"
-        write_state failed_rollback "Rollback failed: service unhealthy after restoring $PREV" "$(date -Iseconds)"
+        trap - EXIT
+        write_state failed_rollback "$reason; rollback failed: service unhealthy after restoring $PREV" "$(date -Iseconds)"
         exit 1
     fi
     log "Rolled back to $PREV successfully"
+    trap - EXIT
     write_state failed "$reason" "$(date -Iseconds)"
     exit 1
 }
 
-: > "$LOG"
+if [ "$DRY_RUN" = 0 ]; then
+    : > "$LOG"
+fi
 log "Starting update from $PREV (dry-run=$DRY_RUN)"
 
 write_state pulling
-run git pull --ff-only || rollback "git pull failed"
+run git pull --ff-only || abort "git pull failed"
 NEW=$(git rev-parse HEAD)
 log "Updating $PREV -> $NEW"
 
@@ -141,4 +199,5 @@ else
 fi
 
 log "Update complete: $PREV -> $NEW"
+trap - EXIT
 write_state done null "$(date -Iseconds)"

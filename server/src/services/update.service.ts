@@ -217,6 +217,11 @@ export class UpdateService {
                 '--collect',
                 `--setenv=INSTALL_DIR=${REPO_ROOT}`,
                 `--setenv=STATE_DIR=${STATE_DIR}`,
+                // The API's port is configurable; the launcher must pass it
+                // explicitly or verification (and the matching rollback health
+                // check) silently checks the wrong port on any instance where
+                // PORT was changed from the 3001 default.
+                `--setenv=HEALTH_URL=http://127.0.0.1:${config.port}/api/health`,
                 UPDATE_SCRIPT_RUNTIME_PATH,
             ], {});
         } catch (err: any) {
