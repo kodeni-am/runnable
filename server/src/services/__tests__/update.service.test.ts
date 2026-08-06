@@ -467,6 +467,38 @@ describe('UpdateService.start', () => {
         });
     });
 
+    // The whole point of the staleness rule: a killed updater must not wedge
+    // the instance forever. A claim that went stale (readState reports it as
+    // failed) must let start() proceed exactly like the normal happy path.
+    it('proceeds when the existing claim has gone stale (heals a killed updater)', async () => {
+        queueExec([
+            { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' }, // check
+            { stdout: '' },   // status --porcelain (clean)
+            { stdout: '' },   // install -m700
+            { stdout: '' },   // mv -f
+            { stdout: '' },   // systemd-run
+        ]);
+        const staleStartedAt = new Date(Date.now() - (STALE_CLAIM_MS + 60 * 1000)).toISOString();
+        readFileMock.mockResolvedValue(JSON.stringify({
+            phase: 'building', prevCommit: 'old0000', newCommit: null,
+            startedAt: staleStartedAt, finishedAt: null, error: null,
+        }));
+        writeFileMock.mockResolvedValue(undefined);
+        renameMock.mockResolvedValue(undefined);
+
+        await expect(UpdateService.start()).resolves.toBeUndefined();
+
+        // Reaches the same launch as the happy path.
+        const files = execFileMock.mock.calls.map((c: any[]) => c[0]);
+        expect(files).toContain('systemd-run');
+
+        // Writes a fresh claim, not the stale one.
+        const writeCall = writeFileMock.mock.calls.find((c: any[]) => c[0].endsWith('.tmp'));
+        expect(writeCall).toBeDefined();
+        const writtenContent = JSON.parse(writeCall![1]);
+        expect(writtenContent.phase).toBe('pulling');
+    });
+
     it('refuses when the working tree is dirty', async () => {
         queueExec([
             { stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '1\n' }, { stdout: 'bbb2222 feat: x' },
