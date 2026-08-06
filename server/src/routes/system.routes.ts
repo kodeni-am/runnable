@@ -97,7 +97,7 @@ async function readNetCounters(): Promise<{ rx: number; tx: number }> {
     let tx = 0;
     try {
         if (process.platform === 'linux') {
-            const data = await readFile('/proc/net/dev', 'utf8');
+            const data = await fs.readFile('/proc/net/dev', 'utf8');
             for (const line of data.split('\n').slice(2)) {
                 const [nameRaw, rest] = line.split(':');
                 if (!rest) continue;
