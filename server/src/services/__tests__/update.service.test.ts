@@ -18,6 +18,7 @@ vi.mock('../../config', () => ({
 }));
 
 import path from 'path';
+import { config } from '../../config';
 import {
     parseCommitLog, healthUrlFor, UpdateService,
     REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH, STALE_CLAIM_MS,
@@ -80,6 +81,14 @@ describe('healthUrlFor', () => {
     it('falls back to loopback for a wildcard bind address', () => {
         expect(healthUrlFor('0.0.0.0', 3001)).toBe('http://127.0.0.1:3001/api/health');
         expect(healthUrlFor('::', 3001)).toBe('http://127.0.0.1:3001/api/health');
+    });
+
+    // A literal IPv6 address's own colons are indistinguishable from the
+    // port separator unless bracketed — curl (and every URL parser) needs
+    // `[::1]:3001`, not `::1:3001`.
+    it('brackets a literal IPv6 host', () => {
+        expect(healthUrlFor('::1', 3001)).toBe('http://[::1]:3001/api/health');
+        expect(healthUrlFor('2001:db8::5', 8080)).toBe('http://[2001:db8::5]:8080/api/health');
     });
 });
 
@@ -397,6 +406,27 @@ describe('UpdateService.start', () => {
         expect(args).toContain('--setenv=HEALTH_URL=http://127.0.0.1:3001/api/health');
         expect(args).toContain('--setenv=WEB_DIR=/var/www/runnable');
         expect(args[args.length - 1]).toBe('/run/runnable-update.sh');
+    });
+
+    // The mocked config's host happens to equal the old hardcoded value
+    // (127.0.0.1), so the test above cannot tell "reads config.host" apart
+    // from "still hardcoded". This one sets a non-loopback host so only the
+    // real wiring produces the right HEALTH_URL — a revert to the hardcoded
+    // literal fails it.
+    it('builds HEALTH_URL from config.host, not a hardcoded loopback address', async () => {
+        const originalHost = config.host;
+        (config as any).host = '10.0.0.5';
+        try {
+            queueHappyPreflight();
+
+            await UpdateService.start();
+
+            const run = execFileMock.mock.calls.find((c: any[]) => c[0] === 'systemd-run')!;
+            const args: string[] = run[1];
+            expect(args).toContain('--setenv=HEALTH_URL=http://10.0.0.5:3001/api/health');
+        } finally {
+            (config as any).host = originalHost;
+        }
     });
 
     it('copies the script out of the repo before running it', async () => {

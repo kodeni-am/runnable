@@ -94,11 +94,14 @@ function git(args: string[]): Promise<string> {
  * The URL the updater polls to verify the new (or rolled-back) build is
  * healthy. A wildcard bind address (0.0.0.0 / ::) is not a valid poll
  * target — nothing listens "on" a wildcard from the outside — so it falls
- * back to loopback, which is always reachable on the same host.
+ * back to loopback, which is always reachable on the same host. A literal
+ * IPv6 address must be bracketed, or curl (and every other URL parser)
+ * cannot tell the address's own colons from the port separator.
  */
 export function healthUrlFor(host: string, port: number): string {
     const target = (host === '0.0.0.0' || host === '::') ? '127.0.0.1' : host;
-    return `http://${target}:${port}/api/health`;
+    const bracketed = target.includes(':') ? `[${target}]` : target;
+    return `http://${bracketed}:${port}/api/health`;
 }
 
 export class UpdateService {

@@ -15,10 +15,29 @@ const DEFAULT_PERMISSIONS: UserPermissions = {
     allowedServerTypes: null,
 };
 
-// Derived from the shared UpdatePhase union (see api/system.ts) rather than
-// declared as bare strings, so a phase added server-side without a matching
-// client update is a compile error here instead of silent misbehaviour.
-const RUNNING_PHASES: UpdatePhase[] = ['pulling', 'installing', 'building', 'syncing', 'restarting', 'verifying', 'rolling_back'];
+// Whether each phase counts as "an update is actively running" — used to
+// keep polling and to disable "Update now". A Record over the UpdatePhase
+// union (see api/system.ts) requires every key to be present, so adding a
+// phase to that union without deciding its entry here is a compile error,
+// not just a typo-checker: a plain `UpdatePhase[]` literal would compile
+// fine even with a phase missing from it, which is the exact bug this
+// list exists to prevent (see item 4 of the self-update follow-up task).
+const IS_RUNNING_PHASE: Record<UpdatePhase, boolean> = {
+    idle: false,
+    pulling: true,
+    installing: true,
+    building: true,
+    syncing: true,
+    restarting: true,
+    verifying: true,
+    done: false,
+    rolling_back: true,
+    failed: false,
+    failed_rollback: false,
+};
+
+const RUNNING_PHASES: UpdatePhase[] =
+    (Object.keys(IS_RUNNING_PHASE) as UpdatePhase[]).filter(phase => IS_RUNNING_PHASE[phase]);
 
 export default function Admin() {
     usePageTitle('Admin');
