@@ -106,4 +106,27 @@ describe('GET /api/system/update/log', () => {
 
         expect(res.body.log).toBe('');
     });
+
+    // The log accumulates full npm ci / npm run build output (doubled on a
+    // rollback) and is polled every 2s — it must be bounded, and bounded to
+    // the tail: the end of the log is what tells an admin whether it's stuck.
+    it('truncates a longer log to its last 64000 characters', async () => {
+        const log = 'START_MARKER' + 'a'.repeat(70_000) + 'END_OF_LOG';
+        readFileMock.mockResolvedValue(log);
+
+        const res = await request(makeApp()).get('/api/system/update/log').expect(200);
+
+        expect(res.body.log.length).toBe(64_000);
+        expect(res.body.log.endsWith('END_OF_LOG')).toBe(true);
+        expect(res.body.log).not.toContain('START_MARKER');
+    });
+
+    it('returns a short log intact', async () => {
+        const log = 'line one\nline two\nline three';
+        readFileMock.mockResolvedValue(log);
+
+        const res = await request(makeApp()).get('/api/system/update/log').expect(200);
+
+        expect(res.body.log).toBe(log);
+    });
 });

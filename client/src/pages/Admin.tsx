@@ -3,7 +3,7 @@ import Layout from '../components/Layout';
 import { adminApi } from '../api/admin';
 import type { UserDTO, UserPermissions } from '../api/admin';
 import { systemApi } from '../api/system';
-import type { BuildCacheInfo, UpdateStatus } from '../api/system';
+import type { BuildCacheInfo, UpdatePhase, UpdateStatus } from '../api/system';
 import { ShieldAlert, Trash2, CheckCircle, ShieldCheck, Settings, HardDrive, UserPlus, RefreshCw, Download } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -15,7 +15,10 @@ const DEFAULT_PERMISSIONS: UserPermissions = {
     allowedServerTypes: null,
 };
 
-const RUNNING_PHASES = ['pulling', 'installing', 'building', 'syncing', 'restarting', 'verifying', 'rolling_back'];
+// Derived from the shared UpdatePhase union (see api/system.ts) rather than
+// declared as bare strings, so a phase added server-side without a matching
+// client update is a compile error here instead of silent misbehaviour.
+const RUNNING_PHASES: UpdatePhase[] = ['pulling', 'installing', 'building', 'syncing', 'restarting', 'verifying', 'rolling_back'];
 
 export default function Admin() {
     usePageTitle('Admin');
@@ -416,28 +419,32 @@ export default function Admin() {
                                     attention on the server.
                                 </div>
                             )}
-
-                            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                                <button className="btn btn-secondary" onClick={handleCheckUpdate} disabled={checking}>
-                                    <RefreshCw size={16} /> {checking ? 'Checking…' : 'Check now'}
-                                </button>
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={handleStartUpdate}
-                                    disabled={starting || update.behind === 0 || RUNNING_PHASES.includes(update.state.phase)}
-                                >
-                                    {starting ? 'Starting…' : 'Update now'}
-                                </button>
-                            </div>
-
-                            {updateLog && (
-                                <pre style={{ marginTop: 16, maxHeight: 260, overflow: 'auto', fontSize: 12, background: 'rgba(0,0,0,0.3)', padding: 12, borderRadius: 8 }}>
-                                    {updateLog}
-                                </pre>
-                            )}
                         </>
                     ) : !updateError && (
                         <p style={{ color: 'var(--text-secondary)' }}>Loading update status…</p>
+                    )}
+
+                    {/* Always rendered, even when the first fetch failed or is still
+                        pending — "Check now" is the only way to recover in place
+                        without a manual page reload. "Update now" stays disabled
+                        with nothing to act on until `update` is known. */}
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        <button className="btn btn-secondary" onClick={handleCheckUpdate} disabled={checking}>
+                            <RefreshCw size={16} /> {checking ? 'Checking…' : 'Check now'}
+                        </button>
+                        <button
+                            className="btn btn-primary"
+                            onClick={handleStartUpdate}
+                            disabled={!update || starting || update.behind === 0 || RUNNING_PHASES.includes(update.state.phase)}
+                        >
+                            {starting ? 'Starting…' : 'Update now'}
+                        </button>
+                    </div>
+
+                    {update && updateLog && (
+                        <pre style={{ marginTop: 16, maxHeight: 260, overflow: 'auto', fontSize: 12, background: 'rgba(0,0,0,0.3)', padding: 12, borderRadius: 8 }}>
+                            {updateLog}
+                        </pre>
                     )}
                 </div>
 

@@ -210,10 +210,17 @@ router.post('/update', async (_req, res, next: NextFunction) => {
     }
 });
 
+// The log accumulates full `npm ci` and `npm run build` output — doubled on
+// a rollback — and the client polls this every 2s and renders it into a
+// <pre>. Cap what we ship: only the most recent chars are useful to a
+// human watching progress, and the tail is what tells them whether it's
+// still moving.
+const MAX_LOG_CHARS = 64_000;
+
 router.get('/update/log', async (_req, res, next: NextFunction) => {
     try {
         const log = await fs.readFile(UPDATE_LOG_PATH, 'utf-8').catch(() => '');
-        res.json({ log });
+        res.json({ log: log.length > MAX_LOG_CHARS ? log.slice(-MAX_LOG_CHARS) : log });
     } catch (error) {
         next(error);
     }

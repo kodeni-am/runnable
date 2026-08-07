@@ -13,6 +13,16 @@ dotenv.config({ path: envPath });
 export const config = {
     port: parseInt(process.env.PORT || '3001', 10),
     nodeEnv: process.env.NODE_ENV || 'development',
+    // Bind address for the HTTP server. In production bind to loopback only:
+    // the API sits behind the reverse proxy, and `trust proxy` makes
+    // X-Forwarded-For authoritative — a direct connection to the port could
+    // spoof it (and with it, the rate-limit buckets). HOST overrides for
+    // containers.
+    host: process.env.HOST || ((process.env.NODE_ENV || 'development') === 'production' ? '127.0.0.1' : '0.0.0.0'),
+    // Directory the self-updater rsyncs the built frontend into — must match
+    // the Caddy site root. Also hardcoded (independently) in setup.sh and
+    // deploy.sh; if an operator changes the Caddy root, this must change too.
+    webDir: process.env.WEB_DIR || '/var/www/runnable',
     // Public URL of the SPA — also the WebAuthn expected origin; its
     // hostname is the WebAuthn rpID.
     clientUrl: process.env.CLIENT_URL || 'http://localhost:5175',

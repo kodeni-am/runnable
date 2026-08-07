@@ -238,11 +238,10 @@ async function bootstrap() {
     // Error handler (must be last)
     app.use(errorHandler);
 
-    // Start server. In production bind to loopback only: the API sits behind
-    // the reverse proxy, and `trust proxy` makes X-Forwarded-For
-    // authoritative — a direct connection to the port could spoof it (and
-    // with it, the rate-limit buckets). HOST overrides for containers.
-    const host = process.env.HOST || (config.nodeEnv === 'production' ? '127.0.0.1' : '0.0.0.0');
+    // Start server. Bind address (and its production/HOST-override defaults)
+    // is computed once in config.host, since UpdateService also needs it to
+    // build the health-check URL it hands to the updater.
+    const host = config.host;
     httpServer.listen(config.port, host, () => {
         console.log(`🚀 Runnable API server running on ${host}:${config.port}`);
         console.log(`📡 Environment: ${config.nodeEnv}`);
@@ -259,6 +258,7 @@ async function bootstrap() {
     const shutdown = async () => {
         console.log('\n🛑 Shutting down...');
         HealthMonitorService.stop();
+        UpdateService.stopPolling();
         io.close();
         // Let in-flight HTTP requests finish before tearing down the DB
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));

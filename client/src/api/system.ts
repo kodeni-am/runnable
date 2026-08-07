@@ -40,6 +40,15 @@ export interface SystemStats {
 
 export interface UpdateCommit { sha: string; subject: string; }
 
+// Mirrors ALL_PHASES / UpdatePhase in server/src/services/update.service.ts.
+// The client cannot import server code, so this list is a manual contract
+// with that one — the two must be changed together, or the client can end
+// up treating an unrecognised phase as terminal and stop polling mid-update.
+export type UpdatePhase =
+    | 'idle' | 'pulling' | 'installing' | 'building' | 'syncing'
+    | 'restarting' | 'verifying' | 'done'
+    | 'rolling_back' | 'failed' | 'failed_rollback';
+
 export interface UpdateStatus {
     current: string;
     behind: number;
@@ -47,7 +56,7 @@ export interface UpdateStatus {
     checkedAt: string;
     error: string | null;
     state: {
-        phase: string;
+        phase: UpdatePhase;
         prevCommit: string | null;
         newCommit: string | null;
         startedAt: string | null;

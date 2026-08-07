@@ -2,6 +2,7 @@
 # Runnable self-update, launched by UpdateService.start via:
 #   systemd-run --unit=runnable-update --collect \
 #     --setenv=INSTALL_DIR=... --setenv=STATE_DIR=... --setenv=HEALTH_URL=... \
+#     --setenv=WEB_DIR=... \
 #     /run/runnable-update.sh
 #
 # Runs in its own transient systemd unit so that `systemctl restart runnable`
@@ -56,20 +57,25 @@ json_escape() {
 # genuinely in-progress update.
 write_state() {
     local phase=$1 error=${2:-null} finished=${3:-null}
+    # The state file is a display value only — nothing parses it — but the
+    # API's own writer (UpdateService.start) uses `git rev-parse --short`, so
+    # match that here. $PREV/$NEW themselves stay full shas: `git reset --hard
+    # "$PREV"` and the log lines need the unambiguous full form.
+    local prev_short=${PREV:0:7}
     local new_json="null"
-    [ -n "$NEW" ] && new_json="\"$NEW\""
+    [ -n "$NEW" ] && new_json="\"${NEW:0:7}\""
     [ "$error" != "null" ] && error="\"$(json_escape "$error")\""
     [ "$finished" != "null" ] && finished="\"$finished\""
 
     if [ "$DRY_RUN" = 1 ]; then
-        log "DRY RUN: would write state: {\"phase\":\"$phase\",\"prevCommit\":\"$PREV\",\"newCommit\":$new_json,\"startedAt\":\"$STARTED_AT\",\"finishedAt\":$finished,\"error\":$error}"
+        log "DRY RUN: would write state: {\"phase\":\"$phase\",\"prevCommit\":\"$prev_short\",\"newCommit\":$new_json,\"startedAt\":\"$STARTED_AT\",\"finishedAt\":$finished,\"error\":$error}"
         return 0
     fi
 
     if cat > "$STATE.tmp" <<JSON
 {
   "phase": "$phase",
-  "prevCommit": "$PREV",
+  "prevCommit": "$prev_short",
   "newCommit": $new_json,
   "startedAt": "$STARTED_AT",
   "finishedAt": $finished,

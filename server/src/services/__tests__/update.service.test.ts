@@ -14,11 +14,14 @@ vi.mock('fs/promises', () => ({
 }));
 
 vi.mock('../../config', () => ({
-    config: { port: 3001, hosting: { servDir: '/var/runnable/projects' } },
+    config: { port: 3001, host: '127.0.0.1', webDir: '/var/www/runnable', hosting: { servDir: '/var/runnable/projects' } },
 }));
 
 import path from 'path';
-import { parseCommitLog, UpdateService, REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH, STALE_CLAIM_MS } from '../update.service';
+import {
+    parseCommitLog, healthUrlFor, UpdateService,
+    REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH, STALE_CLAIM_MS,
+} from '../update.service';
 
 // promisify(execFile) calls execFile(file, args, opts, cb). Resolve or reject
 // per queued response so tests can drive a whole command sequence.
@@ -65,6 +68,18 @@ describe('parseCommitLog', () => {
 
     it('ignores a line with no subject', () => {
         expect(parseCommitLog('abc1234')).toEqual([]);
+    });
+});
+
+describe('healthUrlFor', () => {
+    it('uses a normal host as-is', () => {
+        expect(healthUrlFor('127.0.0.1', 3001)).toBe('http://127.0.0.1:3001/api/health');
+        expect(healthUrlFor('10.0.0.5', 8080)).toBe('http://10.0.0.5:8080/api/health');
+    });
+
+    it('falls back to loopback for a wildcard bind address', () => {
+        expect(healthUrlFor('0.0.0.0', 3001)).toBe('http://127.0.0.1:3001/api/health');
+        expect(healthUrlFor('::', 3001)).toBe('http://127.0.0.1:3001/api/health');
     });
 });
 
@@ -151,6 +166,20 @@ describe('UpdateService.check', () => {
 
         expect(result.behind).toBe(0);
         expect(result.error).toMatch(/not a git repository/);
+    });
+
+    // An unreachable origin must not block GET /api/system/update forever —
+    // git's own TCP connect timeout has no cap otherwise.
+    it('caps every git call with a 60s timeout', async () => {
+        queueExec([{ stdout: '' }, { stdout: 'aaa1111\n' }, { stdout: '0\n' }, { stdout: '' }]);
+
+        await UpdateService.check();
+
+        const gitCalls = execFileMock.mock.calls.filter((c: any[]) => c[0] === 'git');
+        expect(gitCalls.length).toBeGreaterThan(0);
+        for (const call of gitCalls) {
+            expect(call[2]).toMatchObject({ timeout: 60_000 });
+        }
     });
 
     // A forced check (e.g. "Check now") that fails must not be the only place
@@ -366,6 +395,7 @@ describe('UpdateService.start', () => {
         expect(args).toContain(`--setenv=INSTALL_DIR=${REPO_ROOT}`);
         expect(args).toContain(`--setenv=STATE_DIR=${STATE_DIR}`);
         expect(args).toContain('--setenv=HEALTH_URL=http://127.0.0.1:3001/api/health');
+        expect(args).toContain('--setenv=WEB_DIR=/var/www/runnable');
         expect(args[args.length - 1]).toBe('/run/runnable-update.sh');
     });
 

@@ -16,10 +16,14 @@ export const UPDATE_STATE_PATH = path.join(STATE_DIR, 'update-state.json');
 /** The updater is copied here so `git pull` cannot rewrite a running script. */
 export const UPDATE_SCRIPT_RUNTIME_PATH = '/run/runnable-update.sh';
 
-export type UpdatePhase =
-    | 'idle' | 'pulling' | 'installing' | 'building' | 'syncing'
-    | 'restarting' | 'verifying' | 'done'
-    | 'rolling_back' | 'failed' | 'failed_rollback';
+// Declared once, here, so the union type and the validation array used by
+// readState() can never drift apart.
+export const ALL_PHASES = [
+    'idle', 'pulling', 'installing', 'building', 'syncing',
+    'restarting', 'verifying', 'done', 'rolling_back', 'failed', 'failed_rollback',
+] as const;
+
+export type UpdatePhase = typeof ALL_PHASES[number];
 
 /** Phases in which no update is running, so a new one may start. */
 export const TERMINAL_PHASES: UpdatePhase[] = ['idle', 'done', 'failed', 'failed_rollback'];
@@ -52,11 +56,6 @@ const IDLE_STATE: UpdateState = {
     startedAt: null, finishedAt: null, error: null,
 };
 
-const ALL_PHASES: UpdatePhase[] = [
-    'idle', 'pulling', 'installing', 'building', 'syncing',
-    'restarting', 'verifying', 'done', 'rolling_back', 'failed', 'failed_rollback',
-];
-
 const CHECK_TTL_MS = 60 * 60 * 1000; // an unforced check reuses a result this fresh
 const POLL_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -85,7 +84,21 @@ export function parseCommitLog(stdout: string): UpdateCommit[] {
 }
 
 function git(args: string[]): Promise<string> {
-    return execFileAsync('git', args, { cwd: REPO_ROOT }).then(r => r.stdout);
+    // `git fetch` against an unreachable host blocks for the TCP connect
+    // timeout with no cap otherwise, and GET /api/system/update blocks with
+    // it. 60s is generous enough for a slow fetch on a big repo.
+    return execFileAsync('git', args, { cwd: REPO_ROOT, timeout: 60_000 }).then(r => r.stdout);
+}
+
+/**
+ * The URL the updater polls to verify the new (or rolled-back) build is
+ * healthy. A wildcard bind address (0.0.0.0 / ::) is not a valid poll
+ * target — nothing listens "on" a wildcard from the outside — so it falls
+ * back to loopback, which is always reachable on the same host.
+ */
+export function healthUrlFor(host: string, port: number): string {
+    const target = (host === '0.0.0.0' || host === '::') ? '127.0.0.1' : host;
+    return `http://${target}:${port}/api/health`;
 }
 
 export class UpdateService {
@@ -294,11 +307,15 @@ export class UpdateService {
                 `--property=RuntimeMaxSec=${STALE_CLAIM_MS / 1000}`,
                 `--setenv=INSTALL_DIR=${REPO_ROOT}`,
                 `--setenv=STATE_DIR=${STATE_DIR}`,
-                // The API's port is configurable; the launcher must pass it
-                // explicitly or verification (and the matching rollback health
-                // check) silently checks the wrong port on any instance where
-                // PORT was changed from the 3001 default.
-                `--setenv=HEALTH_URL=http://127.0.0.1:${config.port}/api/health`,
+                // The API's port (and bind host) are configurable; the launcher
+                // must pass them explicitly or verification (and the matching
+                // rollback health check) silently checks the wrong address on
+                // any instance where PORT/HOST were changed from the defaults.
+                `--setenv=HEALTH_URL=${healthUrlFor(config.host, config.port)}`,
+                // Independently hardcoded in setup.sh/deploy.sh/the Caddy root —
+                // without this, a Caddy root that differs from the default
+                // silently rsyncs the frontend into the wrong directory.
+                `--setenv=WEB_DIR=${config.webDir}`,
                 UPDATE_SCRIPT_RUNTIME_PATH,
             ], {});
         } catch (err: any) {
