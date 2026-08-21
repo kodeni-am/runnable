@@ -4,17 +4,27 @@ import { SandboxService } from './sandbox.service';
 import { ProcessService } from './process.service';
 import { NotificationService } from './notification.service';
 import { PreviewService } from './preview.service';
+import { PortReconcilerService } from './portReconciler.service';
+import { probeHttp } from './httpProbe';
 
 interface HealthState {
     consecutiveFailures: number;
     restartCount: number;
     windowStartedAt: number;
+    /** Consecutive sweeps where the proxied port answered nothing. */
+    routeFailures: number;
+    /** Whether the route-down alert has already been sent for this outage. */
+    routeDown: boolean;
 }
 
 const CHECK_INTERVAL_MS = 60_000;
 const FAILURES_BEFORE_ACTION = 2; // tolerate one blip (e.g. mid-restart by Docker itself)
 const MAX_RESTARTS_PER_WINDOW = 3;
 const RESTART_WINDOW_MS = 60 * 60 * 1000;
+// Generous enough that a busy-but-alive app isn't called dead; the probe
+// accepts any HTTP status, so only a refused/reset/hung port fails it.
+const ROUTE_PROBE_TIMEOUT_MS = 5_000;
+const ROUTE_FAILURES_BEFORE_ALERT = 2;
 
 export class HealthMonitorService {
     private static timer: NodeJS.Timeout | null = null;
@@ -53,6 +63,13 @@ export class HealthMonitorService {
         if (HealthMonitorService.running) return;
         HealthMonitorService.running = true;
         try {
+            // Repair drifted proxy routes BEFORE probing them. Docker hands
+            // out a new ephemeral host port on every container start, so the
+            // recorded port goes stale on its own; alerting on a route we are
+            // about to fix ourselves would be pure noise.
+            await PortReconcilerService.reconcileAll().catch(err =>
+                console.error('Port reconciliation sweep failed:', err));
+
             const projectRepo = AppDataSource.getRepository(Project);
             const projects = await projectRepo.find({
                 where: { status: ServiceStatus.RUNNING, serverType: ServerType.APP },
@@ -101,14 +118,62 @@ export class HealthMonitorService {
         return result.exitCode === 0 && result.stdout.trim() === 'running';
     }
 
+    /**
+     * A running container does not mean a reachable site. Caddy proxies to
+     * `project.port`, and anything that leaves nothing listening there — a
+     * republished ephemeral port, a service that bound the wrong interface, a
+     * process that died inside an otherwise-healthy container — serves 502s
+     * while every container-level check stays green. That is how a production
+     * domain can 502 for a day unnoticed, so probe the port Caddy actually
+     * dials and make the failure visible.
+     *
+     * Reported, never acted on: the container is healthy, so restarting it is
+     * as likely to cause an outage as to fix one. This is an alert, not a
+     * remediation.
+     */
+    private static async checkRoute(project: Project, state: HealthState): Promise<void> {
+        if (!project.port) return;
+
+        if (await probeHttp(project.port, ROUTE_PROBE_TIMEOUT_MS)) {
+            state.routeFailures = 0;
+            if (!state.routeDown) return;
+            state.routeDown = false;
+            await NotificationService.notify(project, {
+                event: 'health.route_restored',
+                title: `${project.name} is reachable again`,
+                message: `The site is answering on its proxied port (${project.port}) again.`,
+                success: true,
+            });
+            return;
+        }
+
+        state.routeFailures += 1;
+        if (state.routeFailures < ROUTE_FAILURES_BEFORE_ALERT || state.routeDown) return;
+
+        state.routeDown = true;
+        await NotificationService.notify(project, {
+            event: 'health.route_down',
+            title: `${project.name} is serving errors`,
+            message:
+                `The container is running, but nothing is answering on the port the proxy routes to ` +
+                `(${project.port}) — visitors are seeing 502s. Check the app's logs, then redeploy.`,
+            success: false,
+            meta: { port: String(project.port) },
+        });
+    }
+
     private static async checkProject(project: Project): Promise<void> {
         const healthy = await HealthMonitorService.isContainerRunning(project);
         const state = HealthMonitorService.state.get(project.id)
-            ?? { consecutiveFailures: 0, restartCount: 0, windowStartedAt: Date.now() };
+            ?? {
+                consecutiveFailures: 0, restartCount: 0, windowStartedAt: Date.now(),
+                routeFailures: 0, routeDown: false,
+            };
 
         if (healthy) {
             state.consecutiveFailures = 0;
             HealthMonitorService.state.set(project.id, state);
+            await HealthMonitorService.checkRoute(project, state);
             return;
         }
 

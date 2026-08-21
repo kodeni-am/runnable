@@ -14,6 +14,7 @@ import { config, envPath } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { ProcessService } from './services/process.service';
 import { HealthMonitorService } from './services/healthMonitor.service';
+import { PortReconcilerService } from './services/portReconciler.service';
 import { SandboxService } from './services/sandbox.service';
 import { UpdateService } from './services/update.service';
 import { User } from './entities/User';
@@ -102,9 +103,10 @@ async function bootstrap() {
     // the old (or even the freshly switched-to) workload may be alive and
     // serving, so check liveness before declaring ERROR: the health monitor
     // doesn't sweep ERROR projects, so a wrong ERROR here would stick
-    // forever on a healthy site. RUNNING projects are left alone as before —
-    // their containers survive restarts (--restart unless-stopped) and the
-    // health monitor flags any that died.
+    // forever on a healthy site. RUNNING projects keep their status — their
+    // containers survive restarts (--restart unless-stopped) and the health
+    // monitor flags any that died — but the port those containers came back
+    // on is a separate question, settled by the reconciler further down.
     try {
         const projectRepo = AppDataSource.getRepository(Project);
         const stuck = await projectRepo.find({
@@ -249,6 +251,19 @@ async function bootstrap() {
 
     // Remediate any pre-existing sandbox users still in the docker group
     SandboxService.reconcileDockerGroup().catch(() => { });
+
+    // Repair proxy routes left stale by a host reboot. Docker publishes app
+    // workloads on ephemeral host ports and picks a fresh one every time it
+    // starts a container, so `--restart unless-stopped` brings every project
+    // back on a different port than the one its Caddy config was written with.
+    // Nothing else notices — the containers are up — so without this the box
+    // comes back from a reboot serving 502s until someone redeploys by hand.
+    // Run it now rather than waiting for the first health sweep a minute out.
+    PortReconcilerService.reconcileAll()
+        .then(repaired => {
+            if (repaired) console.warn(`⚠️  Repaired ${repaired} stale proxy route(s) after restart`);
+        })
+        .catch(err => console.error('Port reconciliation at boot failed:', err));
 
     // Watch running app containers; notifies + optionally restarts on crash
     HealthMonitorService.start();

@@ -77,6 +77,16 @@ export class ProcessService {
         return next;
     }
 
+    /**
+     * Whether a lifecycle op is queued or running for this project. The port
+     * reconciler consults it before touching a project's proxy config: a
+     * deploy owns that config while it runs, and DEPLOYING is only emitted
+     * over the socket — never persisted — so the DB row alone can't reveal it.
+     */
+    static isBusy(projectId: string): boolean {
+        return ProcessService.projectLocks.has(projectId);
+    }
+
     static start(projectId: string): Promise<void> {
         return ProcessService.withProjectLock(projectId, () => ProcessService.doStart(projectId));
     }
