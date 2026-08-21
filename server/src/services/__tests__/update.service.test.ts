@@ -21,7 +21,7 @@ import path from 'path';
 import { config } from '../../config';
 import {
     parseCommitLog, healthUrlFor, UpdateService,
-    REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH, STALE_CLAIM_MS,
+    REPO_ROOT, STATE_DIR, UPDATE_STATE_PATH, STALE_CLAIM_MS, parseDirtyPaths,
 } from '../update.service';
 
 // promisify(execFile) calls execFile(file, args, opts, cb). Resolve or reject
@@ -678,5 +678,89 @@ describe('UpdateService polling', () => {
 
         expect(vi.getTimerCount()).toBe(0);
         vi.useRealTimers();
+    });
+});
+
+describe('parseDirtyPaths', () => {
+    it('reads paths out of porcelain status lines', () => {
+        expect(parseDirtyPaths(' M package-lock.json')).toEqual(['package-lock.json']);
+        expect(parseDirtyPaths(' M a.ts\nM  b.ts\nA  c.ts')).toEqual(['a.ts', 'b.ts', 'c.ts']);
+    });
+
+    it('takes the destination of a rename', () => {
+        expect(parseDirtyPaths('R  old.ts -> new.ts')).toEqual(['new.ts']);
+    });
+
+    it('ignores blank lines', () => {
+        expect(parseDirtyPaths('')).toEqual([]);
+        expect(parseDirtyPaths('\n M a.ts\n\n')).toEqual(['a.ts']);
+    });
+
+    // Anything we can't read confidently must block the update rather than be
+    // guessed at — the updater's rollback path runs `git reset --hard`.
+    it('refuses to guess at quoted or unparsable paths', () => {
+        expect(parseDirtyPaths(' M "odd\\npath.ts"')).toBeNull();
+        expect(parseDirtyPaths('total nonsense')).toBeNull();
+    });
+});
+
+describe('UpdateService.start dirty-tree gate', () => {
+    // check(true) = fetch, rev-parse, rev-list, log. Then status.
+    const CHECK = [
+        { stdout: '' },
+        { stdout: 'abc1234\n' },
+        { stdout: '2\n' },
+        { stdout: 'aaa1111 one\nbbb2222 two\n' },
+    ];
+    const gitArgsFor = (verb: string) =>
+        execFileMock.mock.calls.filter((c: any[]) => c[0] === 'git' && c[1][0] === verb).map((c: any[]) => c[1]);
+
+    beforeEach(() => {
+        readFileMock.mockRejectedValue(Object.assign(new Error('nope'), { code: 'ENOENT' }));
+        writeFileMock.mockResolvedValue(undefined);
+        renameMock.mockResolvedValue(undefined);
+    });
+
+    it('starts normally on a clean tree, restoring nothing', async () => {
+        queueExec([...CHECK, { stdout: '' }]);
+        await expect(UpdateService.start()).resolves.toBeUndefined();
+        expect(gitArgsFor('checkout')).toEqual([]);
+    });
+
+    // The whole point: a server that ran `npm install` once has a permanently
+    // modified lockfile and could never update again.
+    it('restores a machine-rewritten lockfile instead of refusing forever', async () => {
+        queueExec([...CHECK, { stdout: ' M package-lock.json\n' }]);
+        await expect(UpdateService.start()).resolves.toBeUndefined();
+        expect(gitArgsFor('checkout')).toEqual([['checkout', '--', 'package-lock.json']]);
+    });
+
+    it('still refuses when a real source file was edited, and names it', async () => {
+        queueExec([...CHECK, { stdout: ' M server/src/index.ts\n' }]);
+        await expect(UpdateService.start()).rejects.toThrow(/server\/src\/index\.ts/);
+        expect(gitArgsFor('checkout')).toEqual([]);
+    });
+
+    it('names only the blocking file when a lockfile is dirty alongside it', async () => {
+        queueExec([...CHECK, { stdout: ' M package-lock.json\n M server/src/index.ts\n' }]);
+        await expect(UpdateService.start()).rejects.toThrow(
+            /uncommitted changes to server\/src\/index\.ts —/);
+    });
+
+    it('refuses when the status output cannot be parsed', async () => {
+        queueExec([...CHECK, { stdout: 'total nonsense\n' }]);
+        await expect(UpdateService.start()).rejects.toThrow(/uncommitted changes —/);
+        expect(gitArgsFor('checkout')).toEqual([]);
+    });
+
+    it('caps how many files it names so the error stays readable', async () => {
+        const many = Array.from({ length: 25 }, (_, i) => ` M f${i}.ts`).join('\n');
+        queueExec([...CHECK, { stdout: many }]);
+        await expect(UpdateService.start()).rejects.toThrow(/and 15 more/);
+    });
+
+    it('surfaces a failed restore rather than launching over it', async () => {
+        queueExec([...CHECK, { stdout: ' M package-lock.json\n' }, { error: 'checkout failed' }]);
+        await expect(UpdateService.start()).rejects.toThrow(/checkout failed/);
     });
 });

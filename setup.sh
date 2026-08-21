@@ -333,7 +333,16 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 log "Installing dependencies..."
 cd "$INSTALL_DIR"
-npm install --production=false
+# `npm ci`, not `npm install`, for the same reason deploy.sh and update.sh use
+# it: install RESOLVES afresh and rewrites package-lock.json whenever the local
+# npm differs from the one that generated the committed lock (npm 11 records
+# `libc` constraints that npm 10 strips out again). That rewrite leaves the
+# checkout permanently modified, and the self-updater then refuses to run —
+# one install at setup time was enough to block every future update.
+# --include=dev keeps the build toolchain, which the build below needs even
+# when NODE_ENV=production is already exported.
+echo "==> npm ci (locked, no install scripts)"
+npm ci --include=dev --ignore-scripts
 ok "Dependencies installed"
 
 log "Building client and server..."

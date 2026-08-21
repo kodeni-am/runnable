@@ -28,6 +28,53 @@ export type UpdatePhase = typeof ALL_PHASES[number];
 /** Phases in which no update is running, so a new one may start. */
 export const TERMINAL_PHASES: UpdatePhase[] = ['idle', 'done', 'failed', 'failed_rollback'];
 
+/**
+ * Tracked files a machine rewrites on its own, which nobody edits by hand on
+ * a server. `npm install` rewrites package-lock.json whenever the local npm
+ * differs from the one that generated the committed lock — npm 11 records
+ * `libc` constraints and marks build-only platform packages `devOptional`,
+ * both of which npm 10 strips back out — so one `npm install` on a box with a
+ * different Node line leaves the tree permanently modified. Without this, that
+ * single normalization would block every future update forever.
+ */
+const GENERATED_PATHS = new Set(['package-lock.json']);
+
+/** How many paths an error message names before it summarizes the rest. */
+const MAX_NAMED_PATHS = 10;
+
+/**
+ * The paths carrying a local modification, from `git status --porcelain`.
+ *
+ * Returns null when any line can't be read confidently. The caller then treats
+ * the tree as blocked rather than guessing: everything this function reports as
+ * safe is a file the updater may hand to `git checkout --`, and the rollback
+ * path runs `git reset --hard`. Being unsure has to mean stop, not proceed.
+ */
+export function parseDirtyPaths(porcelain: string): string[] | null {
+    const paths: string[] = [];
+
+    for (const line of porcelain.split('\n')) {
+        if (!line.trim()) continue;
+
+        // Two status columns, a space, then the path.
+        const match = line.match(/^[ MADRCU?!]{2} (.+)$/);
+        if (!match) return null;
+
+        let file = match[1];
+        // git quotes paths containing control or non-ASCII bytes, with C-style
+        // escapes we won't try to decode.
+        if (file.startsWith('"')) return null;
+
+        // Renames and copies read `old -> new`; the new path is the live one.
+        const arrow = file.indexOf(' -> ');
+        if (arrow !== -1) file = file.slice(arrow + 4);
+
+        paths.push(file);
+    }
+
+    return paths;
+}
+
 export interface UpdateCommit { sha: string; subject: string; }
 
 export interface UpdateCheckResult {
@@ -258,12 +305,35 @@ export class UpdateService {
         // safely with the tree unchanged). Without -uno, a single orphaned
         // upload under ./storage/ (untracked, since only server/storage/ is
         // gitignored) would refuse every future update forever.
-        const dirty = (await git(['status', '--porcelain', '-uno'])).trim();
-        if (dirty) {
-            throw new AppError(
-                'The installation has uncommitted changes — refusing to update. Resolve them on the server first.',
-                409,
-            );
+        // Not trimmed: porcelain's first status column is a space for an
+        // unstaged modification (" M path"), and trimming eats it.
+        const dirty = await git(['status', '--porcelain', '-uno']);
+        if (dirty.trim()) {
+            const paths = parseDirtyPaths(dirty);
+            const blocking = paths?.filter(p => !GENERATED_PATHS.has(p)) ?? null;
+
+            if (blocking === null || blocking.length > 0) {
+                // Name the offending files. The old message said only "resolve
+                // them", leaving whoever hit it to go find out what "them" was.
+                const named = blocking?.slice(0, MAX_NAMED_PATHS).join(', ');
+                const rest = blocking && blocking.length > MAX_NAMED_PATHS
+                    ? ` and ${blocking.length - MAX_NAMED_PATHS} more`
+                    : '';
+                throw new AppError(
+                    `The installation has uncommitted changes${named ? ` to ${named}${rest}` : ''} — ` +
+                    'refusing to update. Resolve them on the server first.',
+                    409,
+                );
+            }
+
+            // Only generated files drifted. Discarding them is always the right
+            // call: they are build inputs regenerated from what we are about to
+            // pull, and `npm ci` installs from the committed lock either way.
+            // Leaving them is not an option — `git pull --ff-only` refuses to
+            // overwrite a locally modified file the moment an incoming commit
+            // touches it, so the update would fail at the pull instead.
+            console.warn(`⬆️  Restoring machine-modified ${paths!.join(', ')} before update`);
+            await git(['checkout', '--', ...paths!]);
         }
         if (check.behind === 0) {
             throw new AppError('Already up to date', 400);
