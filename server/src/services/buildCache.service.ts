@@ -86,6 +86,44 @@ export class BuildCacheService {
     }
 
     private static async prune(keepGB: number): Promise<void> {
+        await BuildCacheService.runPrune(keepGB);
+        if (keepGB <= 0) return; // already reclaimed everything
+
+        // A capped prune weighs only the *unshared* slice of the cache against
+        // the cap. It evicts until that slice fits and never touches shared
+        // records, so total usage can settle arbitrarily above the cap — or the
+        // prune can free nothing at all. Measured on two hosts running Docker 29
+        // / BuildKit v0.29 on the containerd snapshotter, both capped at 2GB:
+        //
+        //   shared   private   `prune --max-used-space 2GB`        total after
+        //   16.88GB  1.998GB   freed 0B (private already fit)      18.88GB
+        //    8.33GB  14.10GB   freed 12.27GB (private -> 1.83GB)   10.15GB
+        //
+        // The shared slice came back byte-for-byte identical in both runs, and
+        // `--filter until=720h` freed 0B on the first host as well. Only a full
+        // prune evicts shared records, so verify the cap actually held and
+        // escalate when it did not.
+        let used: number;
+        try {
+            const { daemonBytes, buildkitBytes } = await BuildCacheService.usage();
+            used = daemonBytes + buildkitBytes;
+        } catch {
+            // Can't measure — assume the prune worked rather than nuke a cache
+            // that may well be within its cap.
+            return;
+        }
+
+        if (used <= keepGB * 1e9) return;
+
+        console.warn(
+            `[BuildCache] capped prune left ${(used / 1e9).toFixed(2)}GB against a ` +
+            `${keepGB}GB cap; escalating to a full prune`,
+        );
+        await BuildCacheService.runPrune(0);
+    }
+
+    /** Issues the prune commands for a cap. `keepGB <= 0` reclaims everything. */
+    private static async runPrune(keepGB: number): Promise<void> {
         try {
             await execFileAsync('docker', builderPruneArgsModern(keepGB), EXEC_OPTS);
         } catch (err: any) {
