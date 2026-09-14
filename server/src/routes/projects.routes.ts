@@ -484,10 +484,23 @@ router.post('/:id/stop', requireProjectAccess(ProjectPermission.CAN_START), asyn
     }
 });
 
+// Restart reuses the built image with the current env vars; rebuild is the
+// old restart (stop → build → start) for changes the image bakes in.
 router.post('/:id/restart', requireProjectAccess(ProjectPermission.CAN_START), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const project = (req as any).project as Project;
         await ProcessService.restart(project.id);
+        HealthMonitorService.reset(project.id);
+        res.json({ status: 'running' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/:id/rebuild', requireProjectAccess(ProjectPermission.CAN_START), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        await ProcessService.rebuild(project.id);
         HealthMonitorService.reset(project.id);
         res.json({ status: 'running' });
     } catch (error) {

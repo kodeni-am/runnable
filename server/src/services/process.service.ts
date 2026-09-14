@@ -43,6 +43,14 @@ export interface DeployOutcome {
     strategyReason?: string;
 }
 
+export interface StartOptions {
+    /**
+     * `false` skips the image build when a built image already exists and
+     * runs it with the project's current env vars. Defaults to true.
+     */
+    build?: boolean;
+}
+
 export interface RedeployResult {
     ran: boolean;
     strategy?: DeployStrategy;
@@ -87,11 +95,13 @@ export class ProcessService {
         return ProcessService.projectLocks.has(projectId);
     }
 
-    static start(projectId: string): Promise<void> {
-        return ProcessService.withProjectLock(projectId, () => ProcessService.doStart(projectId));
+    /** Build (or reuse) and run. See `StartOptions`. */
+    static start(projectId: string, opts: StartOptions = {}): Promise<void> {
+        return ProcessService.withProjectLock(projectId, () => ProcessService.doStart(projectId, opts));
     }
 
-    private static async doStart(projectId: string): Promise<void> {
+    private static async doStart(projectId: string, opts: StartOptions = {}): Promise<void> {
+        const build = opts.build !== false;
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
@@ -169,14 +179,27 @@ export class ProcessService {
                     // free port. (The stack was just brought down, so a port that's truly
                     // ours reads as free here.)
                     const injectPort = await resolveComposePort(userEnv, project.port, { reuse: true, verifyFree: true });
-                    actualPort = await ProcessService.composeUpAndWaitForPort(project, composeName, buildLogPath, composeFile, [], injectPort);
+                    if (!build) {
+                        await fs.appendFile(buildLogPath, 'Restart without rebuild: reusing existing images (compose builds only what is missing)\n');
+                    }
+                    actualPort = await ProcessService.composeUpAndWaitForPort(project, composeName, buildLogPath, composeFile, [], injectPort, build);
                     // Store the compose project name in containerId so stop/logs can reference it
                     project.containerId = composeName;
                     project.port = actualPort;
 
                 } else {
                     // ── RAILPACK / DOCKERFILE DEPLOYMENT PATH ───────────────────────────
-                    await ProcessService.buildAppImage(project, effectiveBuildCommand, userEnv, buildLogPath);
+                    // A restart only needs the image that already exists: env
+                    // vars are injected at `docker run`, not baked in. Fall back
+                    // to a build when the image is gone (first start, or pruned).
+                    if (!build && await ProcessService.imageExists(project)) {
+                        await fs.appendFile(buildLogPath, 'Restart without rebuild: reusing existing image\n');
+                    } else {
+                        if (!build) {
+                            await fs.appendFile(buildLogPath, 'No built image found — building\n');
+                        }
+                        await ProcessService.buildAppImage(project, effectiveBuildCommand, userEnv, buildLogPath);
+                    }
 
                     // Kill existing container and any orphaned blue/green generations
                     await ProcessService.sweepContainerGenerations(project, [], false);
@@ -340,9 +363,19 @@ export class ProcessService {
         return doc;
     }
 
+    /** Whether the Railpack-built image for this project is present locally. */
+    private static async imageExists(project: Project): Promise<boolean> {
+        const imageName = `runnable-img-${project.id.substring(0, 8)}`;
+        const result = await SandboxService.exec(project.id, 'docker',
+            ['image', 'inspect', '--format', '{{.Id}}', imageName]).catch(() => null);
+        return !!result && result.exitCode === 0;
+    }
+
     /**
      * `up --build -d` (streaming) on the given compose project name, then
-     * discover the primary service's published host port.
+     * discover the primary service's published host port. With `build`
+     * false the `--build` flag is omitted: compose then reuses existing
+     * images and builds only the ones that are missing.
      */
     private static async composeUpAndWaitForPort(
         project: Project,
@@ -351,6 +384,7 @@ export class ProcessService {
         composeFile: string,
         extraUpArgs: string[] = [],
         injectPort?: number,
+        build: boolean = true,
     ): Promise<number> {
         const composeBase = ProcessService.composeBaseArgs(project, composeName, composeFile);
 
@@ -366,7 +400,7 @@ export class ProcessService {
         await fs.appendFile(buildLogPath, '\n--- Docker Compose Up (streaming) ---\n');
         const composeExitCode = await SandboxService.spawn(
             project.id, 'docker',
-            [...composeBase, 'up', '--build', '-d', ...extraUpArgs],
+            [...composeBase, 'up', ...(build ? ['--build'] : []), '-d', ...extraUpArgs],
             buildLogPath,
             project.directoryPath,
             composeEnv,
@@ -710,7 +744,7 @@ export class ProcessService {
      * label-based container removal when the compose file is gone or no
      * longer parses — `down -f <file>` would silently orphan everything.
      */
-    private static async removeComposeGeneration(project: Project, genName: string): Promise<void> {
+    private static async removeComposeGeneration(project: Project, genName: string, keepImages = false): Promise<void> {
         const composeFile = project.composeFile || 'docker-compose.yml';
         const envFilePath = path.join(project.directoryPath, '.runnable.env');
         const envFileArgs: string[] = [];
@@ -722,7 +756,7 @@ export class ProcessService {
         const down = await SandboxService.exec(
             project.id, 'docker',
             ['compose', '-p', genName, ...envFileArgs, '-f', composeFile,
-                'down', '--remove-orphans', '--rmi', 'local'],
+                'down', '--remove-orphans', ...(keepImages ? [] : ['--rmi', 'local'])],
             project.directoryPath,
         ).catch(() => ({ exitCode: 1, stdout: '', stderr: '' }));
         if (down.exitCode === 0) return;
@@ -735,11 +769,11 @@ export class ProcessService {
         }
     }
 
-    private static async sweepComposeGenerations(project: Project, keep: string[]): Promise<void> {
+    private static async sweepComposeGenerations(project: Project, keep: string[], keepImages = false): Promise<void> {
         const base = `runnable-${project.id.substring(0, 8)}`;
         for (const name of composeGenerations(base)) {
             if (keep.includes(name)) continue;
-            await ProcessService.removeComposeGeneration(project, name);
+            await ProcessService.removeComposeGeneration(project, name, keepImages);
         }
     }
 
@@ -1093,7 +1127,11 @@ export class ProcessService {
         return ProcessService.withProjectLock(projectId, () => ProcessService.doStop(projectId));
     }
 
-    private static async doStop(projectId: string): Promise<void> {
+    /**
+     * `keepImages` leaves locally built compose images in place so the
+     * following start can reuse them (a restart); a plain stop reclaims them.
+     */
+    private static async doStop(projectId: string, opts: { keepImages?: boolean } = {}): Promise<void> {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({ where: { id: projectId } });
 
@@ -1134,7 +1172,7 @@ export class ProcessService {
         // project deletion leak it forever and pin its image.
         if (project.serverType === ServerType.APP) {
             if (project.useCompose) {
-                await ProcessService.sweepComposeGenerations(project, []).catch(() => { });
+                await ProcessService.sweepComposeGenerations(project, [], opts.keepImages === true).catch(() => { });
             } else {
                 await ProcessService.sweepContainerGenerations(project, [], false).catch(() => { });
             }
@@ -1169,7 +1207,21 @@ export class ProcessService {
         await SandboxService.exec(projectId, 'docker', ['rmi', '-f', imageName]).catch(() => {});
     }
 
+    /**
+     * Stop and start again WITHOUT rebuilding: the existing image (or compose
+     * images) is reused with the project's current env vars, so a settings
+     * change is live in seconds. Builds only when no image exists yet. Values
+     * a framework bakes in at build time need `rebuild`.
+     */
     static restart(projectId: string): Promise<void> {
+        return ProcessService.withProjectLock(projectId, async () => {
+            await ProcessService.doStop(projectId, { keepImages: true });
+            await ProcessService.doStart(projectId, { build: false });
+        });
+    }
+
+    /** Stop, build from scratch, and start — the pre-fast-restart behaviour. */
+    static rebuild(projectId: string): Promise<void> {
         return ProcessService.withProjectLock(projectId, async () => {
             await ProcessService.doStop(projectId);
             await ProcessService.doStart(projectId);
@@ -1187,8 +1239,9 @@ export class ProcessService {
             const projectRepo = AppDataSource.getRepository(Project);
             const project = await projectRepo.findOne({ where: { id: projectId } });
             if (!project || project.status !== ServiceStatus.ERROR) return false;
-            await ProcessService.doStop(projectId);
-            await ProcessService.doStart(projectId);
+            // A crash is not a reason to rebuild — reuse the image.
+            await ProcessService.doStop(projectId, { keepImages: true });
+            await ProcessService.doStart(projectId, { build: false });
             return true;
         });
     }

@@ -13,7 +13,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useProjectSocket } from '../hooks/useProjectSocket';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
-    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus, RefreshCw
+    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus, RefreshCw, Hammer
 } from 'lucide-react';
 
 const DEFAULT_COLLAB_PERMS: ProjectPermissions = {
@@ -248,7 +248,7 @@ export default function ProjectDetail() {
         catch (err: any) { alert(err.response?.data?.error || 'Failed to destroy preview'); }
     };
 
-    const handleAction = async (action: 'start' | 'stop' | 'restart') => {
+    const handleAction = async (action: 'start' | 'stop' | 'restart' | 'rebuild') => {
         if (!id) return;
         setActionLoading(action);
         try {
@@ -581,9 +581,16 @@ export default function ProjectDetail() {
                                 <button className="btn btn-secondary" onClick={() => handleAction('stop')} disabled={p.status === 'stopped' || !!actionLoading}>
                                     {actionLoading === 'stop' ? <span className="spinner" /> : <Square size={16} />} Stop
                                 </button>
-                                <button className="btn btn-secondary" onClick={() => handleAction('restart')} disabled={!!actionLoading}>
+                                <button className="btn btn-secondary" onClick={() => handleAction('restart')} disabled={!!actionLoading}
+                                    title="Restart with the current env vars. Reuses the built image, so it takes seconds.">
                                     {actionLoading === 'restart' ? <span className="spinner" /> : <RotateCcw size={16} />} Restart
                                 </button>
+                                {p.serverType === 'app' && (
+                                    <button className="btn btn-secondary" onClick={() => handleAction('rebuild')} disabled={!!actionLoading}
+                                        title="Stop, rebuild the image from the current code, and start again.">
+                                        {actionLoading === 'rebuild' ? <span className="spinner" /> : <Hammer size={16} />} Rebuild
+                                    </button>
+                                )}
                             </>
                         )}
                         {canDelete && (
@@ -1267,6 +1274,10 @@ export default function ProjectDetail() {
                                         )}
                                     </div>
                                 </label>
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                    Saved env vars apply on Restart, which reuses the built image. Values a framework bakes in
+                                    at build time (NEXT_PUBLIC_*, VITE_*, and the like) need Rebuild.
+                                </div>
                                 {envVarsTextMode ? (
                                     <div style={{ marginTop: 10 }}>
                                         <textarea
