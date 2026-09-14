@@ -405,7 +405,10 @@ describe('UpdateService.start', () => {
         expect(args).toContain(`--setenv=STATE_DIR=${STATE_DIR}`);
         expect(args).toContain('--setenv=HEALTH_URL=http://127.0.0.1:3001/api/health');
         expect(args).toContain('--setenv=WEB_DIR=/var/www/runnable');
-        expect(args[args.length - 1]).toBe('/run/runnable-update.sh');
+        // /run is a tmpfs mounted noexec on Ubuntu/Debian, so the script must
+        // be fed to the interpreter rather than exec'd directly — otherwise
+        // systemd reports "Failed to find executable ...: Permission denied".
+        expect(args.slice(-2)).toEqual(['/bin/bash', '/run/runnable-update.sh']);
     });
 
     // The mocked config's host happens to equal the old hardcoded value

@@ -3,7 +3,7 @@
 #   systemd-run --unit=runnable-update --collect \
 #     --setenv=INSTALL_DIR=... --setenv=STATE_DIR=... --setenv=HEALTH_URL=... \
 #     --setenv=WEB_DIR=... \
-#     /run/runnable-update.sh
+#     /bin/bash /run/runnable-update.sh
 #
 # Runs in its own transient systemd unit so that `systemctl restart runnable`
 # partway through does not kill it. Never run this from inside the API process.

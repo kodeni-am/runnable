@@ -389,7 +389,11 @@ export class UpdateService {
                 // without this, a Caddy root that differs from the default
                 // silently rsyncs the frontend into the wrong directory.
                 `--setenv=WEB_DIR=${config.webDir}`,
-                UPDATE_SCRIPT_RUNTIME_PATH,
+                // Through the interpreter, not exec'd: /run is a tmpfs mounted
+                // noexec on Ubuntu/Debian, so a direct ExecStart fails with
+                // "Failed to find executable ...: Permission denied" even as
+                // root. bash only needs to read the file.
+                '/bin/bash', UPDATE_SCRIPT_RUNTIME_PATH,
             ], {});
         } catch (err: any) {
             const stderr = err?.stderr || '';
