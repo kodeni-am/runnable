@@ -1,4 +1,5 @@
 import dns from 'dns/promises';
+import { IsNull, Not } from 'typeorm';
 import { AppDataSource } from '../config/data-source';
 import { CustomDomain, Project } from '../entities';
 import { ServerConfigService } from './serverConfig.service';
@@ -6,12 +7,67 @@ import { ProcessService } from './process.service';
 import { AppError } from '../middleware/errorHandler';
 import { config } from '../config';
 
+const DOMAIN_REGEX = /^(\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+const CERT_PATH_REGEX = /^\/[A-Za-z0-9._/-]+$/;
+
+export function isWildcardDomain(domain: string): boolean {
+    return domain.startsWith('*.');
+}
+
+/** `*.moments.am` -> `moments.am`. Returns non-wildcards unchanged. */
+export function wildcardApex(domain: string): string {
+    return isWildcardDomain(domain) ? domain.slice(2) : domain;
+}
+
+export interface AddDomainOptions {
+    tlsCertPath?: string | null;
+    tlsKeyPath?: string | null;
+    redirectTarget?: string | null;
+    isAdmin?: boolean;
+}
+
 export class DomainService {
-    static async addDomain(projectId: string, domain: string): Promise<{ domain: CustomDomain; instructions: string }> {
-        // Validate domain format
-        const domainRegex = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
-        if (!domainRegex.test(domain)) {
+    static async addDomain(
+        projectId: string,
+        rawDomain: string,
+        options: AddDomainOptions = {},
+    ): Promise<{ domain: CustomDomain; instructions: string }> {
+        const domain = String(rawDomain).trim().toLowerCase();
+        if (!DOMAIN_REGEX.test(domain)) {
             throw new AppError('Invalid domain format', 400);
+        }
+
+        const wildcard = isWildcardDomain(domain);
+        const tlsCertPath = options.tlsCertPath || null;
+        const tlsKeyPath = options.tlsKeyPath || null;
+
+        for (const p of [tlsCertPath, tlsKeyPath]) {
+            if (p && !CERT_PATH_REGEX.test(p)) {
+                throw new AppError('Certificate paths must be absolute and contain only letters, digits, . _ - /', 400);
+            }
+        }
+        if (!wildcard && (tlsCertPath || tlsKeyPath)) {
+            throw new AppError('Certificate paths are only supported on wildcard domains', 400);
+        }
+        if (wildcard) {
+            if (!options.isAdmin) {
+                throw new AppError('Only admins can add wildcard domains', 403);
+            }
+            if (!tlsCertPath || !tlsKeyPath) {
+                throw new AppError('Wildcard domains require both a certificate path and a key path', 400);
+            }
+            if (options.redirectTarget) {
+                throw new AppError('Wildcard domains cannot have a redirect target', 400);
+            }
+            const apex = wildcardApex(domain);
+            const covers = (base: string) => base === apex || base.endsWith(`.${apex}`);
+            if (covers(config.hosting.baseDomain.toLowerCase())) {
+                throw new AppError('Wildcard would cover the platform hosting domain', 400);
+            }
+            const previews = await AppDataSource.getRepository(Project).find({ where: { previewBaseDomain: Not(IsNull()) } });
+            if (previews.some(p => p.previewBaseDomain && covers(p.previewBaseDomain.toLowerCase()))) {
+                throw new AppError('Wildcard would cover a project preview domain', 400);
+            }
         }
 
         const domainRepo = AppDataSource.getRepository(CustomDomain);
@@ -33,12 +89,16 @@ export class DomainService {
             projectId,
             verified: false,
             sslProvisioned: false,
+            tlsCertPath,
+            tlsKeyPath,
         });
 
         await domainRepo.save(customDomain);
 
         const targetCname = `${project.subdomain}.${config.hosting.baseDomain}`;
-        const instructions = `Add a CNAME record:\n  ${domain} → ${targetCname}\n\nOr add a TXT record:\n  _runnable-verify.${domain} → ${project.id}`;
+        const instructions = wildcard
+            ? `Add a TXT record:\n  _runnable-verify.${wildcardApex(domain)} → ${project.id}`
+            : `Add a CNAME record:\n  ${domain} → ${targetCname}\n\nOr add a TXT record:\n  _runnable-verify.${domain} → ${project.id}`;
 
         return { domain: customDomain, instructions };
     }
@@ -56,22 +116,25 @@ export class DomainService {
 
         const targetCname = `${customDomain.project.subdomain}.${config.hosting.baseDomain}`;
 
-        try {
-            // Try CNAME verification
-            const cnameRecords = await dns.resolveCname(customDomain.domain);
-            if (cnameRecords.some(r => r === targetCname)) {
-                customDomain.verified = true;
-                await domainRepo.save(customDomain);
-                // Regenerate config with new domain
-                await DomainService.regenerateProjectConfig(customDomain.project.id);
-                return true;
+        if (!isWildcardDomain(customDomain.domain)) {
+            try {
+                // Try CNAME verification
+                const cnameRecords = await dns.resolveCname(customDomain.domain);
+                if (cnameRecords.some(r => r === targetCname)) {
+                    customDomain.verified = true;
+                    await domainRepo.save(customDomain);
+                    // Regenerate config with new domain
+                    await DomainService.regenerateProjectConfig(customDomain.project.id);
+                    return true;
+                }
+            } catch {
+                // CNAME lookup failed, try TXT verification
             }
-        } catch {
-            // CNAME lookup failed, try TXT verification
         }
 
         try {
-            const txtRecords = await dns.resolveTxt(`_runnable-verify.${customDomain.domain}`);
+            // A wildcard has no CNAME of its own; its TXT record lives at the apex
+            const txtRecords = await dns.resolveTxt(`_runnable-verify.${wildcardApex(customDomain.domain)}`);
             const flat = txtRecords.flat();
             if (flat.includes(customDomain.project.id)) {
                 customDomain.verified = true;
