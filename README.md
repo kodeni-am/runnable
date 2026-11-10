@@ -216,6 +216,24 @@ thing in its own systemd unit. See
 | `--repo`   | Git repository URL to clone from         | Current dir |
 | `--branch` | Git branch to use                        | `main`      |
 
+### Wildcard Custom Domains
+
+An admin can add a wildcard domain such as `*.example.com` to a project. Unlike regular domains, Caddy cannot issue its certificate automatically, so you supply one (for example a Cloudflare Origin certificate covering `example.com` and `*.example.com`) as files on the server:
+
+- Certificate: `/etc/caddy/certs/<apex>.origin.pem`
+- Key: `/etc/caddy/certs/<apex>.origin.key`
+- Owner `root:caddy`, mode `0640`
+
+```bash
+sudo install -d -m 0750 -o root -g caddy /etc/caddy/certs
+sudo install -m 0640 -o root -g caddy origin.pem /etc/caddy/certs/example.com.origin.pem
+sudo install -m 0640 -o root -g caddy origin.key /etc/caddy/certs/example.com.origin.key
+```
+
+Then add the domain in the project's Domains tab, filling in the certificate and key paths. Ownership is verified with a TXT record at the apex: `_runnable-verify.<apex>` with the project ID as its value. The wildcard gets its own Caddy site block using `tls <cert> <key>`; if the files are unreadable by Caddy the block is skipped with a warning.
+
+After adding the domain, run `sudo caddy validate --config /etc/caddy/Caddyfile`. A readable but invalid certificate makes the reload fail for every site, not just this one.
+
 ## Private NPM Registries
 
 A project can install from a private npm registry: set the registry URL, an

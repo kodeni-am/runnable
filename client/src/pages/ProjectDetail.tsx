@@ -47,6 +47,8 @@ export default function ProjectDetail() {
     // Domain state
     const [showAddDomain, setShowAddDomain] = useState(false);
     const [newDomain, setNewDomain] = useState('');
+    const [newCertPath, setNewCertPath] = useState('');
+    const [newKeyPath, setNewKeyPath] = useState('');
     const [newRedirectTarget, setNewRedirectTarget] = useState('');
     const [domainError, setDomainError] = useState('');
     const [domains, setDomains] = useState<any[]>([]);
@@ -292,9 +294,17 @@ export default function ProjectDetail() {
         if (!id) return;
         setDomainError('');
         try {
-            await projectsApi.addDomain(id, newDomain, newRedirectTarget || undefined);
+            const wildcard = isAdmin && newDomain.trim().startsWith('*.');
+            await projectsApi.addDomain(
+                id,
+                newDomain,
+                newRedirectTarget || undefined,
+                wildcard ? { tlsCertPath: newCertPath.trim(), tlsKeyPath: newKeyPath.trim() } : undefined,
+            );
             setShowAddDomain(false);
             setNewDomain('');
+            setNewCertPath('');
+            setNewKeyPath('');
             setNewRedirectTarget('');
             loadDomains();
         } catch (err: any) {
@@ -1010,6 +1020,19 @@ export default function ProjectDetail() {
                                         <label>Domain</label>
                                         <input className="form-input" placeholder="mysite.com" value={newDomain} onChange={(e) => setNewDomain(e.target.value)} />
                                     </div>
+                                    {isAdmin && newDomain.trim().startsWith('*.') && (
+                                        <>
+                                            <div className="form-group">
+                                                <label>Certificate path</label>
+                                                <input className="form-input" placeholder="/etc/caddy/certs/example.com.origin.pem" value={newCertPath} onChange={(e) => setNewCertPath(e.target.value)} />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Key path</label>
+                                                <input className="form-input" placeholder="/etc/caddy/certs/example.com.origin.key" value={newKeyPath} onChange={(e) => setNewKeyPath(e.target.value)} />
+                                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Wildcard domains use a certificate file on the server and are verified with a TXT record at the apex.</p>
+                                            </div>
+                                        </>
+                                    )}
                                     <div className="form-group">
                                         <label>Redirect Target (Optional)</label>
                                         <input className="form-input" placeholder="e.g. anothersite.com" value={newRedirectTarget} onChange={(e) => setNewRedirectTarget(e.target.value)} />
@@ -1020,7 +1043,7 @@ export default function ProjectDetail() {
                                     </div>
                                     <div className="modal-actions">
                                         <button className="btn btn-secondary" onClick={() => setShowAddDomain(false)}>Cancel</button>
-                                        <button className="btn btn-primary" onClick={handleAddDomain} disabled={!newDomain}>Add Domain</button>
+                                        <button className="btn btn-primary" onClick={handleAddDomain} disabled={!newDomain || (isAdmin && newDomain.trim().startsWith('*.') && (!newCertPath.trim() || !newKeyPath.trim()))}>Add Domain</button>
                                     </div>
                                 </div>
                             </div>
