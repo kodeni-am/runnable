@@ -39,12 +39,18 @@ export class DomainService {
         }
 
         const wildcard = isWildcardDomain(domain);
+        const rawPaths: unknown[] = [options.tlsCertPath, options.tlsKeyPath];
+        for (const p of rawPaths) {
+            if (p && typeof p !== 'string') {
+                throw new AppError('Certificate paths must be strings', 400);
+            }
+        }
         const tlsCertPath = options.tlsCertPath || null;
         const tlsKeyPath = options.tlsKeyPath || null;
 
         for (const p of [tlsCertPath, tlsKeyPath]) {
-            if (p && !CERT_PATH_REGEX.test(p)) {
-                throw new AppError('Certificate paths must be absolute and contain only letters, digits, . _ - /', 400);
+            if (p && (!CERT_PATH_REGEX.test(p) || p.split('/').includes('..'))) {
+                throw new AppError('Certificate paths must be absolute, without .. segments, and contain only letters, digits, . _ - /', 400);
             }
         }
         if (!wildcard && (tlsCertPath || tlsKeyPath)) {

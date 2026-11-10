@@ -224,7 +224,7 @@ export class ProcessService {
 
         const configContent = await ServerConfigService.generateConfig(
             await buildProxyOptions(
-                { ...project, serverType: (project as any).serverType || ServerType.STATIC } as Project,
+                { ...project, serverType: (project as any).serverType || ServerType.STATIC },
                 project.customDomains,
                 { port: (project as any).port || 8080 },
             )

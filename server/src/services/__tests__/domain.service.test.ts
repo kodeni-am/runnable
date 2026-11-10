@@ -107,6 +107,22 @@ describe('addDomain', () => {
             ).rejects.toMatchObject({ statusCode: 400 });
         }
     });
+
+    it('rejects cert paths with a parent segment', async () => {
+        for (const bad of ['/etc/caddy/../shadow', '/etc/caddy/certs/..', '/../etc/a.pem']) {
+            await expect(
+                DomainService.addDomain('p-1', '*.moments.am', { ...wildcardOpts, tlsKeyPath: bad }),
+            ).rejects.toMatchObject({ statusCode: 400 });
+        }
+    });
+
+    it('rejects non-string cert paths', async () => {
+        for (const bad of [123, ['/etc/a.pem'], { a: 1 }, true]) {
+            await expect(
+                DomainService.addDomain('p-1', '*.moments.am', { ...wildcardOpts, tlsCertPath: bad as any }),
+            ).rejects.toMatchObject({ statusCode: 400 });
+        }
+    });
 });
 
 describe('verifyDomain', () => {
