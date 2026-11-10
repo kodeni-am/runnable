@@ -1,17 +1,19 @@
-import fs from 'fs';
 import type { CustomDomain, Project } from '../entities';
 import type { ServerConfigOptions } from './serverConfig.service';
+import { defaultCertCheckDeps, wildcardCertProblem, type CertCheckDeps } from './certCheck';
 
 /**
  * Build the options for ServerConfigService.generateConfig from a project and
- * its custom domains. A wildcard domain carries a supplied certificate; if the
- * cert or key is unreadable the wildcard is dropped with a warning, so one bad
- * path cannot make every later Caddy reload fail.
+ * its custom domains. A wildcard domain carries a supplied certificate; unless
+ * it would load in Caddy (parses, key matches, unexpired, covers the apex,
+ * readable by the caddy user) the wildcard is dropped with a warning, because
+ * Caddy reloads are global and one bad cert would fail every later reload.
  */
 export async function buildProxyOptions(
     project: Pick<Project, 'subdomain' | 'directoryPath' | 'serverType' | 'port' | 'baseDomain' | 'isPreview'>,
     domains: Pick<CustomDomain, 'domain' | 'redirectTarget' | 'tlsCertPath' | 'tlsKeyPath'>[] | undefined,
     overrides: { port?: number } = {},
+    certDeps: CertCheckDeps = defaultCertCheckDeps,
 ): Promise<ServerConfigOptions> {
     const customDomains: NonNullable<ServerConfigOptions['customDomains']> = [];
     for (const d of domains || []) {
@@ -21,15 +23,14 @@ export async function buildProxyOptions(
         }
         const cert = d.tlsCertPath;
         const key = d.tlsKeyPath;
-        try {
-            if (typeof cert !== 'string' || typeof key !== 'string') throw new Error('certificate or key path missing');
-            await fs.promises.access(cert, fs.constants.R_OK);
-            await fs.promises.access(key, fs.constants.R_OK);
-        } catch (err: any) {
-            console.warn(`Skipping wildcard domain ${d.domain}: certificate or key unreadable (${err?.message || err})`);
+        const problem = typeof cert !== 'string' || typeof key !== 'string'
+            ? 'certificate or key path missing'
+            : await wildcardCertProblem(d.domain, cert, key, certDeps);
+        if (problem) {
+            console.warn(`Skipping wildcard domain ${d.domain}: ${problem}`);
             continue;
         }
-        customDomains.push({ domain: d.domain, redirectTarget: null, tls: { cert, key } });
+        customDomains.push({ domain: d.domain, redirectTarget: null, tls: { cert: cert as string, key: key as string } });
     }
     return {
         subdomain: project.subdomain,

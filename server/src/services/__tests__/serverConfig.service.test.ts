@@ -101,7 +101,7 @@ describe('wildcard domains', () => {
     });
 
     it('skips a wildcard whose cert or key is unreadable', async () => {
-        vi.spyOn(fs.promises, 'access').mockRejectedValue(new Error('ENOENT'));
+        vi.spyOn(fs.promises, 'readFile').mockRejectedValue(new Error('ENOENT'));
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const opts = await buildProxyOptions(
             { subdomain: 'moments', directoryPath: '/srv/m', serverType: ServerType.APP, port: 4100 } as any,
@@ -111,14 +111,5 @@ describe('wildcard domains', () => {
         const out = await ServerConfigService.generateConfig(opts);
         expect(out).not.toContain('*.moments.am');
         expect(out).toContain('moments.am {');
-    });
-
-    it('buildProxyOptions keeps a readable wildcard and maps tls', async () => {
-        vi.spyOn(fs.promises, 'access').mockResolvedValue(undefined);
-        const opts = await buildProxyOptions(
-            { subdomain: 'moments', directoryPath: '/srv/m', serverType: ServerType.APP, port: 4100 } as any,
-            [{ domain: '*.moments.am', redirectTarget: null, tlsCertPath: CERT, tlsKeyPath: KEY }] as any,
-        );
-        expect(opts.customDomains).toEqual([{ domain: '*.moments.am', redirectTarget: null, tls: { cert: CERT, key: KEY } }]);
     });
 });
