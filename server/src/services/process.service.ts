@@ -114,11 +114,6 @@ export class ProcessService {
             throw new Error('Service is already running');
         }
 
-        // Ensure config is up to date
-        const customDomains = (project.customDomains || [])
-            .filter(d => d.verified)
-            .map(d => d.domain);
-
         let actualPort = project.port || 8080;
 
         // If the project is an APP, we build and run via Docker + Railpack

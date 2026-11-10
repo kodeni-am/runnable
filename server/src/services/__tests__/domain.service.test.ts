@@ -34,6 +34,7 @@ vi.mock('dns/promises', () => ({
 }));
 
 import { config } from '../../config';
+import { ServerConfigService } from '../serverConfig.service';
 import { DomainService, isWildcardDomain, wildcardApex, wildcardCovers } from '../domain.service';
 
 const CERT = '/etc/caddy/certs/moments.am.origin.pem';
@@ -197,6 +198,51 @@ describe('verifyDomain', () => {
         expect(await DomainService.verifyDomain('d-1', 'p-1')).toBe(true);
         expect(resolveTxt).toHaveBeenCalledWith('_runnable-verify.moments.am');
         expect(resolveCname).not.toHaveBeenCalled();
+    });
+
+    // The row the DB hands back is the same object verifyDomain flips, so the
+    // regenerated config sees the domain only because it is now verified.
+    function regularDomainFixture() {
+        const row: any = { id: 'd-2', domain: 'example.org', verified: false, redirectTarget: null, tlsCertPath: null, tlsKeyPath: null, projectId: 'p-1' };
+        const project = { id: 'p-1', subdomain: 'moments', directoryPath: '/srv/m', serverType: 'app', port: 4100, customDomains: [row] };
+        row.project = project;
+        domainFindOne.mockResolvedValue(row);
+        projectFindOne.mockResolvedValue(project);
+        return row;
+    }
+
+    it('regenerates the config with a regular domain once its CNAME verifies', async () => {
+        const row = regularDomainFixture();
+        resolveCname.mockResolvedValue([`moments.${config.hosting.baseDomain}`]);
+        expect(await DomainService.verifyDomain('d-2', 'p-1')).toBe(true);
+        expect(row.verified).toBe(true);
+        expect(ServerConfigService.generateConfig).toHaveBeenCalledWith(expect.objectContaining({
+            customDomains: [{ domain: 'example.org', redirectTarget: null }],
+        }));
+        expect(ServerConfigService.writeConfig).toHaveBeenCalledWith('moments', '', 'app');
+        expect(ServerConfigService.reloadCaddy).toHaveBeenCalled();
+    });
+
+    it('regenerates the config with a regular domain once its TXT verifies', async () => {
+        regularDomainFixture();
+        resolveCname.mockRejectedValue(new Error('ENODATA'));
+        resolveTxt.mockResolvedValue([['p-1']]);
+        expect(await DomainService.verifyDomain('d-2', 'p-1')).toBe(true);
+        expect(resolveTxt).toHaveBeenCalledWith('_runnable-verify.example.org');
+        expect(ServerConfigService.generateConfig).toHaveBeenCalledWith(expect.objectContaining({
+            customDomains: [{ domain: 'example.org', redirectTarget: null }],
+        }));
+        expect(ServerConfigService.reloadCaddy).toHaveBeenCalled();
+    });
+
+    it('leaves the domain unverified and the config untouched when DNS does not match', async () => {
+        const row = regularDomainFixture();
+        resolveCname.mockResolvedValue(['elsewhere.example.net']);
+        resolveTxt.mockResolvedValue([['someone-else']]);
+        expect(await DomainService.verifyDomain('d-2', 'p-1')).toBe(false);
+        expect(row.verified).toBe(false);
+        expect(ServerConfigService.generateConfig).not.toHaveBeenCalled();
+        expect(ServerConfigService.reloadCaddy).not.toHaveBeenCalled();
     });
 });
 
