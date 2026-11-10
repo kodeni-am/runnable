@@ -6,6 +6,7 @@ import { SandboxService } from './sandbox.service';
 import { ServerConfigService } from './serverConfig.service';
 import { ProcessService } from './process.service';
 import { NotificationService } from './notification.service';
+import { buildProxyOptions } from './proxyOptions';
 
 /**
  * Extract the host port from `docker port <ctr> <internal>` output.
@@ -176,18 +177,9 @@ export class PortReconcilerService {
         if (ProcessService.isBusy(project.id)) return false;
 
         const previous = fresh.port;
-        const content = await ServerConfigService.generateConfig({
-            subdomain: fresh.subdomain,
-            directoryPath: fresh.directoryPath,
-            port: live,
-            serverType: fresh.serverType,
-            customDomains: (fresh.customDomains || []).map(cd => ({
-                domain: cd.domain,
-                redirectTarget: cd.redirectTarget || null,
-            })),
-            baseDomain: fresh.baseDomain || undefined,
-            onDemandTls: fresh.isPreview === true,
-        });
+        const content = await ServerConfigService.generateConfig(
+            await buildProxyOptions(fresh, fresh.customDomains, { port: live })
+        );
         const configPath = await ServerConfigService.writeConfig(
             fresh.subdomain, content, fresh.serverType);
         await projectRepo.update(fresh.id, { port: live, configPath });

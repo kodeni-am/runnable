@@ -3,12 +3,17 @@ import path from 'path';
 import { config } from '../config';
 import { ServerType } from '../entities';
 
-interface ServerConfigOptions {
+export interface ServerConfigOptions {
     subdomain: string;
     directoryPath: string;
     port: number;
     serverType: ServerType;
-    customDomains?: { domain: string, redirectTarget: string | null }[];
+    customDomains?: {
+        domain: string;
+        redirectTarget?: string | null;
+        /** Supplied certificate (wildcard domains only); emitted in the domain's own site block. */
+        tls?: { cert: string; key: string };
+    }[];
     /** Overrides config.hosting.baseDomain (preview environments). */
     baseDomain?: string;
     /** Emit `tls { on_demand }` so Caddy fetches the cert lazily (previews). */
@@ -31,13 +36,42 @@ export class ServerConfigService {
         return sanitized;
     }
 
+    // A custom domain may carry one leading `*.`; everything after it is a plain domain.
+    private static sanitizeCustomDomain(domain: string): string {
+        if (typeof domain === 'string' && domain.startsWith('*.')) {
+            return `*.${ServerConfigService.sanitizeDomain(domain.slice(2))}`;
+        }
+        return ServerConfigService.sanitizeDomain(domain);
+    }
+
+    // Cert/key paths land in a `tls` directive: absolute, plain characters, no `..` segment.
+    private static sanitizeCertPath(value: unknown): string {
+        if (typeof value !== 'string') {
+            throw new Error('Invalid certificate path: not a string');
+        }
+        if (!/^\/[A-Za-z0-9._\-/+@]+$/.test(value) || value.split('/').includes('..')) {
+            throw new Error(`Invalid certificate path: ${value}`);
+        }
+        return value;
+    }
+
     static async generateConfig(options: ServerConfigOptions): Promise<string> {
         // Sanitize all domains before generating config
+        const wildcardsWithoutTls = (options.customDomains || []).filter(d => d.domain?.startsWith('*.') && !d.tls);
+        if (wildcardsWithoutTls.length) {
+            throw new Error(`Wildcard domain needs a certificate: ${wildcardsWithoutTls[0].domain}`);
+        }
         options.subdomain = ServerConfigService.sanitizeDomain(options.subdomain);
         if (options.customDomains) {
             options.customDomains = options.customDomains.map(d => ({
-                domain: ServerConfigService.sanitizeDomain(d.domain),
-                redirectTarget: d.redirectTarget ? ServerConfigService.sanitizeDomain(d.redirectTarget) : null
+                domain: ServerConfigService.sanitizeCustomDomain(d.domain),
+                redirectTarget: d.redirectTarget ? ServerConfigService.sanitizeDomain(d.redirectTarget) : null,
+                ...(d.tls ? {
+                    tls: {
+                        cert: ServerConfigService.sanitizeCertPath(d.tls.cert),
+                        key: ServerConfigService.sanitizeCertPath(d.tls.key),
+                    },
+                } : {}),
             }));
         }
 
@@ -62,7 +96,8 @@ export class ServerConfigService {
     static generateCaddyConfig(options: ServerConfigOptions): string {
         const baseDomain = options.baseDomain || config.hosting.baseDomain;
         const redirectedDomains = options.customDomains?.filter(d => Boolean(d.redirectTarget)) || [];
-        const normalCustomDomains = options.customDomains?.filter(d => !d.redirectTarget)?.map(d => d.domain) || [];
+        const wildcardDomains = options.customDomains?.filter(d => !d.redirectTarget && d.tls) || [];
+        const normalCustomDomains = options.customDomains?.filter(d => !d.redirectTarget && !d.tls)?.map(d => d.domain) || [];
 
         const mainDomains = [
             `${options.subdomain}.${baseDomain}`,
@@ -76,14 +111,13 @@ export class ServerConfigService {
             configStr += `${rd.domain} {\n  redir https://${rd.redirectTarget}{uri}\n}\n\n`;
         }
 
-        const domainList = mainDomains.join(', ');
         // Preview hostnames use on-demand TLS: Caddy fetches the cert on first
         // request (gated by the tls-check ask endpoint) instead of up front.
-        const tlsBlock = options.onDemandTls ? '  tls {\n    on_demand\n  }\n' : '';
-
-        if (options.serverType === ServerType.STATIC) {
-            configStr += `${domainList} {
-${tlsBlock}  root * ${options.directoryPath}
+        const mainTls = options.onDemandTls ? '  tls {\n    on_demand\n  }\n' : '';
+        const siteBlock = (addresses: string, tlsLines: string): string => {
+            if (options.serverType === ServerType.STATIC) {
+                return `${addresses} {
+${tlsLines}  root * ${options.directoryPath}
   @dot {
     path_regexp (^|/)\\.
     not path /.well-known/*
@@ -96,15 +130,23 @@ ${tlsBlock}  root * ${options.directoryPath}
   }
 }
 `;
-        } else {
-            configStr += `${domainList} {
-${tlsBlock}  reverse_proxy localhost:${options.port}
+            }
+            return `${addresses} {
+${tlsLines}  reverse_proxy localhost:${options.port}
   encode gzip zstd
   log {
     output file /var/log/caddy/${options.subdomain}.log
   }
 }
 `;
+        };
+
+        configStr += siteBlock(mainDomains.join(', '), mainTls);
+
+        // Each wildcard gets its own block with its supplied certificate; Caddy
+        // prefers exact hosts over wildcards, so the main block keeps winning.
+        for (const wd of wildcardDomains) {
+            configStr += `\n${siteBlock(wd.domain, `  tls ${wd.tls!.cert} ${wd.tls!.key}\n`)}`;
         }
 
         return configStr;

@@ -174,8 +174,8 @@ export const projectsApi = {
 
     // Custom domains
     listDomains: (id: string) => api.get(`/projects/${id}/domains`),
-    addDomain: (id: string, domain: string, redirectTarget?: string) =>
-        api.post(`/projects/${id}/domains`, { domain, redirectTarget }),
+    addDomain: (id: string, domain: string, redirectTarget?: string, tls?: { tlsCertPath: string; tlsKeyPath: string }) =>
+        api.post(`/projects/${id}/domains`, { domain, redirectTarget, ...tls }),
     updateDomainRedirect: (id: string, domainId: string, redirectTarget: string | null) =>
         api.put(`/projects/${id}/domains/${domainId}/redirect`, { redirectTarget }),
     verifyDomain: (id: string, domainId: string) => api.post(`/projects/${id}/domains/${domainId}/verify`),

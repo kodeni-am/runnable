@@ -34,10 +34,15 @@ router.post('/:id/domains', requireProjectAccess(ProjectPermission.CAN_EDIT_DOMA
             throw new AppError('You are not allowed to use custom domains', 403);
         }
 
-        const { domain, redirectTarget } = req.body;
+        const { domain, redirectTarget, tlsCertPath, tlsKeyPath } = req.body;
         if (!domain) throw new AppError('Domain is required', 400);
 
-        const result = await DomainService.addDomain(project.id, domain);
+        const result = await DomainService.addDomain(project.id, domain, {
+            tlsCertPath,
+            tlsKeyPath,
+            redirectTarget,
+            isAdmin: req.user!.role === Role.ADMIN,
+        });
 
         // If they provided a redirect target right away, set it
         if (redirectTarget) {

@@ -24,6 +24,13 @@ export class CustomDomain {
     @Column({ type: 'varchar', nullable: true })
     redirectTarget: string | null;
 
+    /** Absolute paths to a supplied certificate and key; used by wildcard domains. */
+    @Column({ type: 'varchar', nullable: true })
+    tlsCertPath: string | null;
+
+    @Column({ type: 'varchar', nullable: true })
+    tlsKeyPath: string | null;
+
     @ManyToOne(() => Project, (project) => project.customDomains, { onDelete: 'CASCADE' })
     project: Project;
 

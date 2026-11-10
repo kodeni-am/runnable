@@ -22,6 +22,7 @@ import { AddZeroDowntime1772641000000 } from '../migrations/1772641000000-AddZer
 import { AddWebAuthnCredentials1772642000000 } from '../migrations/1772642000000-AddWebAuthnCredentials';
 import { AddNpmRegistry1772643000000 } from '../migrations/1772643000000-AddNpmRegistry';
 import { AddAllowPublicRegistration1772644000000 } from '../migrations/1772644000000-AddAllowPublicRegistration';
+import { AddDomainTlsPaths1772645000000 } from '../migrations/1772645000000-AddDomainTlsPaths';
 
 export const AppDataSource = new DataSource({
     type: 'postgres',
@@ -34,6 +35,6 @@ export const AppDataSource = new DataSource({
     migrationsRun: true, // Auto-run pending migrations on startup
     logging: config.nodeEnv === 'development',
     entities: [User, Project, GithubRepo, CustomDomain, AppSettings, ProjectCollaborator, Deployment, WebAuthnCredential],
-    migrations: [InitialSchema1709520000000, AddDomainRedirectTarget1772633000000, AddPermissions1772634000000, AddComposeSupport1772635000000, AddDeployments1772636000000, AddNotificationsAndAutoRestart1772637000000, AddTokenVersion1772638000000, AddPreviewColumns1772639000000, AddBuildCacheKeepGB1772640000000, AddZeroDowntime1772641000000, AddWebAuthnCredentials1772642000000, AddNpmRegistry1772643000000, AddAllowPublicRegistration1772644000000],
+    migrations: [InitialSchema1709520000000, AddDomainRedirectTarget1772633000000, AddPermissions1772634000000, AddComposeSupport1772635000000, AddDeployments1772636000000, AddNotificationsAndAutoRestart1772637000000, AddTokenVersion1772638000000, AddPreviewColumns1772639000000, AddBuildCacheKeepGB1772640000000, AddZeroDowntime1772641000000, AddWebAuthnCredentials1772642000000, AddNpmRegistry1772643000000, AddAllowPublicRegistration1772644000000, AddDomainTlsPaths1772645000000],
     subscribers: [],
 });

@@ -216,6 +216,38 @@ thing in its own systemd unit. See
 | `--repo`   | Git repository URL to clone from         | Current dir |
 | `--branch` | Git branch to use                        | `main`      |
 
+### Wildcard Custom Domains
+
+An admin can add a wildcard domain such as `*.example.com` to a project. Unlike regular domains, Caddy cannot issue its certificate automatically, so you supply one (for example a Cloudflare Origin certificate) as files on the server:
+
+- Certificate: `/etc/caddy/certs/<apex>.origin.pem`
+- Key: `/etc/caddy/certs/<apex>.origin.key`
+- Owner `root:caddy`, mode `0640`
+
+```bash
+sudo install -d -m 0750 -o root -g caddy /etc/caddy/certs
+sudo install -m 0640 -o root -g caddy origin.pem /etc/caddy/certs/example.com.origin.pem
+sudo install -m 0640 -o root -g caddy origin.key /etc/caddy/certs/example.com.origin.key
+```
+
+Issue the certificate for the wildcard name only (`*.example.com`), not the apex. Caddy does not request a Let's Encrypt certificate for any name a loaded certificate covers, so leaving the apex out keeps its automatic certificate. Every other host the wildcard covers (one label deep, for example `www.example.com`) is then served the supplied certificate. With a Cloudflare Origin certificate, browsers trust it only behind the Cloudflare proxy, so keep those hosts proxied (orange cloud, SSL mode Full (strict)).
+
+Then add the domain in the project's Domains tab, filling in the certificate and key paths. Ownership is verified with a TXT record at the apex: `_runnable-verify.<apex>` with the project ID as its value. The wildcard gets its own Caddy site block using `tls <cert> <key>`.
+
+Because a certificate Caddy cannot load fails the reload for every site, Runnable checks the files on every config write and skips the wildcard block with a warning in the server log unless all of these hold:
+
+- both files parse as PEM: a certificate (a chain is fine, leaf first) and an unencrypted private key;
+- the key matches the certificate;
+- the certificate has not expired;
+- the certificate covers a host directly under the apex (`x.<apex>`), so a wildcard-only certificate passes;
+- the `caddy` user can read both files and traverse every parent directory, judged from the file mode bits and the user's groups in `/etc/passwd` and `/etc/group` (skipped on hosts without a `caddy` user).
+
+After adding the domain, it is still worth running `sudo caddy validate --config /etc/caddy/Caddyfile`.
+
+A user cannot add an exact domain that another project's wildcard covers (for example `anna.example.com` under `*.example.com`), and a wildcard cannot be added while another project owns an exact domain it covers. Both requests fail with a message naming the conflict.
+
+**Rolling back:** remove all wildcard domains before rolling Runnable back to a release without wildcard support. Older releases reject `*.` names when they rebuild the Caddy config, so starting, deploying or reloading that project would fail.
+
 ## Private NPM Registries
 
 A project can install from a private npm registry: set the registry URL, an
