@@ -1,5 +1,5 @@
 import dns from 'dns/promises';
-import { IsNull, Like, Not } from 'typeorm';
+import { ILike, IsNull, Not } from 'typeorm';
 import { AppDataSource } from '../config/data-source';
 import { CustomDomain, Project } from '../entities';
 import { ServerConfigService } from './serverConfig.service';
@@ -97,8 +97,8 @@ export class DomainService {
         // another project's wildcard would take that host over.
         if (wildcard) {
             const apex = wildcardApex(domain);
-            const under = await domainRepo.find({ where: { domain: Like(`%.${apex}`) } });
-            const taken = under.find(d => d.projectId !== projectId && wildcardCovers(domain, d.domain));
+            const under = await domainRepo.find({ where: { domain: ILike(`%.${apex}`) } });
+            const taken = under.find(d => d.projectId !== projectId && wildcardCovers(domain, d.domain.toLowerCase()));
             if (taken) {
                 throw new AppError(`${taken.domain} belongs to another project; remove it before adding ${domain}`, 400);
             }

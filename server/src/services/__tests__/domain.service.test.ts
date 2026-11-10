@@ -156,6 +156,12 @@ describe('addDomain — no takeover across projects', () => {
         expect(save).not.toHaveBeenCalled();
     });
 
+    it('matches a legacy mixed-case exact domain on another project', async () => {
+        rows([{ domain: 'Anna.Moments.AM', projectId: 'p-other' }]);
+        await expect(DomainService.addDomain('p-1', '*.moments.am', wildcardOpts)).rejects.toMatchObject({ statusCode: 400 });
+        expect(domainFind.mock.calls[0][0].where.domain.type).toBe('ilike');
+    });
+
     it('ignores other-project domains the wildcard does not cover', async () => {
         rows([
             { domain: 'moments.am', projectId: 'p-other' },
