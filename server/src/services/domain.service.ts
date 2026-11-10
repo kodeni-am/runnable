@@ -208,6 +208,9 @@ export class DomainService {
         if (!customDomain) {
             throw new AppError('Domain not found', 404);
         }
+        if (isWildcardDomain(customDomain.domain)) {
+            throw new AppError('Wildcard domains cannot have a redirect target', 400);
+        }
 
         // Validate basic URL shape if target is provided
         if (redirectTarget) {

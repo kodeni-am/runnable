@@ -298,7 +298,7 @@ export default function ProjectDetail() {
             await projectsApi.addDomain(
                 id,
                 newDomain,
-                newRedirectTarget || undefined,
+                newDomain.trim().startsWith('*.') ? undefined : newRedirectTarget || undefined,
                 wildcard ? { tlsCertPath: newCertPath.trim(), tlsKeyPath: newKeyPath.trim() } : undefined,
             );
             setShowAddDomain(false);
@@ -943,7 +943,15 @@ export default function ProjectDetail() {
                                                 </span>
                                             )}
                                         </div>
-                                        {!d.verified && (
+                                        {!d.verified && d.domain.startsWith('*.') && (
+                                            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border, rgba(255,255,255,0.1))', fontSize: 12, color: 'var(--text-muted)' }}>
+                                                <div style={{ marginBottom: 6 }}>To verify, add this DNS record at the apex, then click Verify:</div>
+                                                <div style={{ fontFamily: 'monospace', whiteSpace: 'nowrap', overflowX: 'auto' }}>
+                                                    TXT&nbsp;&nbsp;&nbsp;&nbsp;_runnable-verify.{d.domain.slice(2)} → {p.id}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {!d.verified && !d.domain.startsWith('*.') && (
                                             <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border, rgba(255,255,255,0.1))', fontSize: 12, color: 'var(--text-muted)' }}>
                                                 <div style={{ marginBottom: 6 }}>To verify, add <strong>one</strong> of these DNS records, then click Verify:</div>
                                                 <div style={{ fontFamily: 'monospace', whiteSpace: 'nowrap', overflowX: 'auto' }}>
@@ -960,18 +968,20 @@ export default function ProjectDetail() {
                                     </div>
                                     {canEditDomains && (
                                         <div style={{ display: 'flex', gap: 8 }}>
-                                            <button
-                                                className="btn btn-secondary"
-                                                onClick={() => {
-                                                    setEditingDomain(d);
-                                                    setEditRedirectTarget(d.redirectTarget || '');
-                                                    setShowEditRedirect(true);
-                                                    setDomainError('');
-                                                }}
-                                                style={{ fontSize: 13, padding: '6px 12px' }}
-                                            >
-                                                <Edit size={14} style={{ marginRight: 4 }} /> Redirect
-                                            </button>
+                                            {!d.domain.startsWith('*.') && (
+                                                <button
+                                                    className="btn btn-secondary"
+                                                    onClick={() => {
+                                                        setEditingDomain(d);
+                                                        setEditRedirectTarget(d.redirectTarget || '');
+                                                        setShowEditRedirect(true);
+                                                        setDomainError('');
+                                                    }}
+                                                    style={{ fontSize: 13, padding: '6px 12px' }}
+                                                >
+                                                    <Edit size={14} style={{ marginRight: 4 }} /> Redirect
+                                                </button>
+                                            )}
                                             {!d.verified && (
                                                 <button className="btn btn-secondary" onClick={() => handleVerifyDomain(d.id)} style={{ fontSize: 13, padding: '6px 12px' }}>
                                                     Verify
@@ -1033,14 +1043,22 @@ export default function ProjectDetail() {
                                             </div>
                                         </>
                                     )}
-                                    <div className="form-group">
-                                        <label>Redirect Target (Optional)</label>
-                                        <input className="form-input" placeholder="e.g. anothersite.com" value={newRedirectTarget} onChange={(e) => setNewRedirectTarget(e.target.value)} />
-                                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>If set, traffic to this domain will redirect to the target domain.</p>
-                                    </div>
-                                    <div className="alert alert-info">
-                                        After adding, you'll need to verify ownership with a CNAME record pointing to <strong>{p.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}</strong> — or, for root domains (which can't have a CNAME), a TXT record. Exact records will be shown next to the domain.
-                                    </div>
+                                    {newDomain.trim().startsWith('*.') ? (
+                                        <div className="alert alert-info">
+                                            After adding, verify ownership with a TXT record: <strong>_runnable-verify.{newDomain.trim().toLowerCase().slice(2)}</strong> with the project ID as its value. The exact record will be shown next to the domain.
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="form-group">
+                                                <label>Redirect Target (Optional)</label>
+                                                <input className="form-input" placeholder="e.g. anothersite.com" value={newRedirectTarget} onChange={(e) => setNewRedirectTarget(e.target.value)} />
+                                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>If set, traffic to this domain will redirect to the target domain.</p>
+                                            </div>
+                                            <div className="alert alert-info">
+                                                After adding, you'll need to verify ownership with a CNAME record pointing to <strong>{p.subdomain}.{import.meta.env.VITE_BASE_DOMAIN || 'localhost:5175'}</strong> — or, for root domains (which can't have a CNAME), a TXT record. Exact records will be shown next to the domain.
+                                            </div>
+                                        </>
+                                    )}
                                     <div className="modal-actions">
                                         <button className="btn btn-secondary" onClick={() => setShowAddDomain(false)}>Cancel</button>
                                         <button className="btn btn-primary" onClick={handleAddDomain} disabled={!newDomain || (isAdmin && newDomain.trim().startsWith('*.') && (!newCertPath.trim() || !newKeyPath.trim()))}>Add Domain</button>

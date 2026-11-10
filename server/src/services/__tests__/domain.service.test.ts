@@ -173,6 +173,16 @@ describe('addDomain — no takeover across projects', () => {
     });
 });
 
+describe('setRedirectTarget', () => {
+    it('rejects a wildcard row', async () => {
+        domainFindOne.mockResolvedValue({ id: 'd-1', domain: '*.moments.am', projectId: 'p-1', project: { id: 'p-1' } });
+        for (const target of ['example.com', null]) {
+            await expect(DomainService.setRedirectTarget('d-1', 'p-1', target)).rejects.toMatchObject({ statusCode: 400 });
+        }
+        expect(save).not.toHaveBeenCalled();
+    });
+});
+
 describe('verifyDomain', () => {
     it('verifies a wildcard by TXT at the apex and never by CNAME', async () => {
         domainFindOne.mockResolvedValue({ id: 'd-1', domain: '*.moments.am', project: { id: 'p-1', subdomain: 'moments' } });
