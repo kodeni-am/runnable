@@ -21,6 +21,7 @@ import { DeployError, DeployStrategy, HealthGateResult, DeployPhase } from './de
 import { HealthMonitorService } from './healthMonitor.service';
 import { buildNpmrcContent, maskToken, NPMRC_SENTINEL } from './npmrc';
 import { decryptSecret } from './crypto.service';
+import { buildProxyOptions } from './proxyOptions';
 
 interface ManagedProcess {
     process: ChildProcess;
@@ -221,18 +222,13 @@ export class ProcessService {
             }
         }
 
-        const configContent = await ServerConfigService.generateConfig({
-            subdomain: project.subdomain,
-            directoryPath: project.directoryPath,
-            port: (project as any).port || 8080,
-            serverType: (project as any).serverType || ServerType.STATIC,
-            customDomains: (project as any).customDomains?.map((cd: any) => ({
-                domain: cd.domain,
-                redirectTarget: cd.redirectTarget || null
-            })) || [],
-            baseDomain: (project as any).baseDomain || undefined,
-            onDemandTls: (project as any).isPreview === true,
-        });
+        const configContent = await ServerConfigService.generateConfig(
+            await buildProxyOptions(
+                { ...project, serverType: (project as any).serverType || ServerType.STATIC } as Project,
+                project.customDomains,
+                { port: (project as any).port || 8080 },
+            )
+        );
         const configPath = await ServerConfigService.writeConfig(
             project.subdomain,
             configContent,
@@ -839,18 +835,9 @@ export class ProcessService {
 
     /** Regenerate + write the proxy config for the given port. Returns the config path. */
     private static async writeProxyConfig(project: Project, port: number): Promise<string> {
-        const content = await ServerConfigService.generateConfig({
-            subdomain: project.subdomain,
-            directoryPath: project.directoryPath,
-            port,
-            serverType: project.serverType,
-            customDomains: (project.customDomains || []).map((cd: any) => ({
-                domain: cd.domain,
-                redirectTarget: cd.redirectTarget || null,
-            })),
-            baseDomain: project.baseDomain || undefined,
-            onDemandTls: project.isPreview === true,
-        });
+        const content = await ServerConfigService.generateConfig(
+            await buildProxyOptions(project, project.customDomains, { port })
+        );
         return ServerConfigService.writeConfig(project.subdomain, content, project.serverType);
     }
 

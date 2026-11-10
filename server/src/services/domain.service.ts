@@ -6,6 +6,7 @@ import { ServerConfigService } from './serverConfig.service';
 import { ProcessService } from './process.service';
 import { AppError } from '../middleware/errorHandler';
 import { config } from '../config';
+import { buildProxyOptions } from './proxyOptions';
 
 const DOMAIN_REGEX = /^(\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 const CERT_PATH_REGEX = /^\/[A-Za-z0-9._/-]+$/;
@@ -211,18 +212,9 @@ export class DomainService {
 
         if (!project) return;
 
-        const configContent = await ServerConfigService.generateConfig({
-            subdomain: project.subdomain,
-            directoryPath: project.directoryPath,
-            port: project.port || 8080,
-            serverType: project.serverType,
-            customDomains: project.customDomains?.map(cd => ({
-                domain: cd.domain,
-                redirectTarget: cd.redirectTarget || null
-            })) || [],
-            baseDomain: project.baseDomain || undefined,
-            onDemandTls: project.isPreview === true,
-        });
+        const configContent = await ServerConfigService.generateConfig(
+            await buildProxyOptions(project, project.customDomains, { port: project.port || 8080 })
+        );
 
         await ServerConfigService.writeConfig(project.subdomain, configContent, project.serverType);
         await ServerConfigService.reloadCaddy();

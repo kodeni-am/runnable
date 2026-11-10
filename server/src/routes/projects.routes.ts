@@ -20,6 +20,7 @@ import { GithubService } from '../services/github.service';
 import { PreviewService } from '../services/preview.service';
 import { getTemplate } from '../templates/catalog';
 import { encryptSecret } from '../services/crypto.service';
+import { buildProxyOptions } from '../services/proxyOptions';
 
 const router = Router();
 
@@ -522,18 +523,9 @@ router.post('/:id/reload-proxy', requireProjectAccess(ProjectPermission.CAN_EDIT
         const project = (req as any).project as Project;
 
         // Generate and write new config
-        const configContent = await ServerConfigService.generateConfig({
-            subdomain: project.subdomain,
-            directoryPath: project.directoryPath,
-            port: project.port || 80,
-            serverType: project.serverType,
-            customDomains: project.customDomains?.map(cd => ({
-                domain: cd.domain,
-                redirectTarget: cd.redirectTarget || null
-            })) || [],
-            baseDomain: project.baseDomain || undefined,
-            onDemandTls: project.isPreview === true,
-        });
+        const configContent = await ServerConfigService.generateConfig(
+            await buildProxyOptions(project, project.customDomains, { port: project.port || 80 })
+        );
 
         const configPath = await ServerConfigService.writeConfig(
             project.subdomain,
