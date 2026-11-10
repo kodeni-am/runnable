@@ -123,7 +123,7 @@ describe('buildProxyOptions wildcard validation', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const opts = await buildProxyOptions(
             project,
-            [{ domain: 'example.com', redirectTarget: null }, wildcardRow(cert, key)] as any,
+            [{ domain: 'example.com', verified: true, redirectTarget: null }, wildcardRow(cert, key)] as any,
             {},
             deps,
         );

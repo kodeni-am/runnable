@@ -105,7 +105,7 @@ describe('wildcard domains', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const opts = await buildProxyOptions(
             { subdomain: 'moments', directoryPath: '/srv/m', serverType: ServerType.APP, port: 4100 } as any,
-            [{ domain: 'moments.am', redirectTarget: null }, { domain: '*.moments.am', redirectTarget: null, tlsCertPath: CERT, tlsKeyPath: KEY }] as any,
+            [{ domain: 'moments.am', verified: true, redirectTarget: null }, { domain: '*.moments.am', redirectTarget: null, tlsCertPath: CERT, tlsKeyPath: KEY }] as any,
         );
         expect(warn).toHaveBeenCalled();
         const out = await ServerConfigService.generateConfig(opts);
