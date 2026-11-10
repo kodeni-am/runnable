@@ -1,5 +1,5 @@
 import dns from 'dns/promises';
-import { IsNull, Not } from 'typeorm';
+import { IsNull, Like, Not } from 'typeorm';
 import { AppDataSource } from '../config/data-source';
 import { CustomDomain, Project } from '../entities';
 import { ServerConfigService } from './serverConfig.service';
@@ -18,6 +18,14 @@ export function isWildcardDomain(domain: string): boolean {
 /** `*.moments.am` -> `moments.am`. Returns non-wildcards unchanged. */
 export function wildcardApex(domain: string): string {
     return isWildcardDomain(domain) ? domain.slice(2) : domain;
+}
+
+/** Whether a Caddy wildcard covers a host: exactly one extra label in front of the apex. */
+export function wildcardCovers(wildcard: string, host: string): boolean {
+    const apex = wildcardApex(wildcard);
+    if (!isWildcardDomain(wildcard) || isWildcardDomain(host) || !host.endsWith(`.${apex}`)) return false;
+    const label = host.slice(0, -(apex.length + 1));
+    return label.length > 0 && !label.includes('.');
 }
 
 export interface AddDomainOptions {
@@ -83,6 +91,23 @@ export class DomainService {
         const existing = await domainRepo.findOne({ where: { domain } });
         if (existing) {
             throw new AppError('Domain is already in use', 409);
+        }
+
+        // Caddy prefers an exact site over a wildcard, so an exact domain under
+        // another project's wildcard would take that host over.
+        if (wildcard) {
+            const apex = wildcardApex(domain);
+            const under = await domainRepo.find({ where: { domain: Like(`%.${apex}`) } });
+            const taken = under.find(d => d.projectId !== projectId && wildcardCovers(domain, d.domain));
+            if (taken) {
+                throw new AppError(`${taken.domain} belongs to another project; remove it before adding ${domain}`, 400);
+            }
+        } else {
+            const parentWildcard = `*.${domain.split('.').slice(1).join('.')}`;
+            const owner = await domainRepo.findOne({ where: { domain: parentWildcard } });
+            if (owner && owner.projectId !== projectId) {
+                throw new AppError(`${domain} is covered by ${parentWildcard}, which belongs to another project`, 400);
+            }
         }
 
         const projectRepo = AppDataSource.getRepository(Project);

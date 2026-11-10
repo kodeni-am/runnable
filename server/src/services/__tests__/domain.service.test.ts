@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const domainFindOne = vi.fn();
+const domainFind = vi.fn();
 const projectFindOne = vi.fn();
 const projectFind = vi.fn();
 const save = vi.fn(async (x: any) => x);
@@ -10,7 +11,7 @@ vi.mock('../../config/data-source', () => ({
         getRepository: (entity: any) =>
             entity?.name === 'Project'
                 ? { findOne: projectFindOne, find: projectFind }
-                : { findOne: domainFindOne, save, create },
+                : { findOne: domainFindOne, find: domainFind, save, create },
     },
 }));
 
@@ -33,7 +34,7 @@ vi.mock('dns/promises', () => ({
 }));
 
 import { config } from '../../config';
-import { DomainService, isWildcardDomain, wildcardApex } from '../domain.service';
+import { DomainService, isWildcardDomain, wildcardApex, wildcardCovers } from '../domain.service';
 
 const CERT = '/etc/caddy/certs/moments.am.origin.pem';
 const KEY = '/etc/caddy/certs/moments.am.origin.key';
@@ -42,6 +43,7 @@ const wildcardOpts = { tlsCertPath: CERT, tlsKeyPath: KEY, isAdmin: true };
 beforeEach(() => {
     vi.clearAllMocks();
     domainFindOne.mockResolvedValue(null);
+    domainFind.mockResolvedValue([]);
     projectFind.mockResolvedValue([]);
     projectFindOne.mockResolvedValue({ id: 'p-1', subdomain: 'moments' });
 });
@@ -125,6 +127,52 @@ describe('addDomain', () => {
     });
 });
 
+describe('addDomain — no takeover across projects', () => {
+    const rows = (list: { domain: string; projectId: string }[]) => {
+        domainFindOne.mockImplementation(async ({ where }: any) => list.find(r => r.domain === where.domain) ?? null);
+        domainFind.mockResolvedValue(list);
+    };
+
+    it("rejects an exact domain under another project's wildcard", async () => {
+        rows([{ domain: '*.moments.am', projectId: 'p-other' }]);
+        await expect(DomainService.addDomain('p-1', 'anna.moments.am')).rejects.toMatchObject({
+            statusCode: 400,
+            message: expect.stringContaining('*.moments.am'),
+        });
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('allows an exact domain two labels under the wildcard (Caddy covers one label)', async () => {
+        rows([{ domain: '*.moments.am', projectId: 'p-other' }]);
+        await expect(DomainService.addDomain('p-1', 'a.b.moments.am')).resolves.toBeDefined();
+    });
+
+    it("rejects a wildcard while another project owns an exact domain it covers", async () => {
+        rows([{ domain: 'anna.moments.am', projectId: 'p-other' }]);
+        await expect(DomainService.addDomain('p-1', '*.moments.am', wildcardOpts)).rejects.toMatchObject({
+            statusCode: 400,
+            message: expect.stringContaining('anna.moments.am'),
+        });
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('ignores other-project domains the wildcard does not cover', async () => {
+        rows([
+            { domain: 'moments.am', projectId: 'p-other' },
+            { domain: 'a.b.moments.am', projectId: 'p-other' },
+            { domain: 'anna.notmoments.am', projectId: 'p-other' },
+        ]);
+        await expect(DomainService.addDomain('p-1', '*.moments.am', wildcardOpts)).resolves.toBeDefined();
+    });
+
+    it('allows exact and wildcard on the same project, in either order', async () => {
+        rows([{ domain: '*.moments.am', projectId: 'p-1' }]);
+        await expect(DomainService.addDomain('p-1', 'www.moments.am')).resolves.toBeDefined();
+        rows([{ domain: 'www.moments.am', projectId: 'p-1' }]);
+        await expect(DomainService.addDomain('p-1', '*.moments.am', wildcardOpts)).resolves.toBeDefined();
+    });
+});
+
 describe('verifyDomain', () => {
     it('verifies a wildcard by TXT at the apex and never by CNAME', async () => {
         domainFindOne.mockResolvedValue({ id: 'd-1', domain: '*.moments.am', project: { id: 'p-1', subdomain: 'moments' } });
@@ -141,5 +189,13 @@ describe('helpers', () => {
         expect(isWildcardDomain('*.moments.am')).toBe(true);
         expect(isWildcardDomain('moments.am')).toBe(false);
         expect(wildcardApex('*.moments.am')).toBe('moments.am');
+    });
+
+    it('a wildcard covers exactly one label', () => {
+        expect(wildcardCovers('*.moments.am', 'anna.moments.am')).toBe(true);
+        expect(wildcardCovers('*.moments.am', 'moments.am')).toBe(false);
+        expect(wildcardCovers('*.moments.am', 'a.b.moments.am')).toBe(false);
+        expect(wildcardCovers('*.moments.am', 'annamoments.am')).toBe(false);
+        expect(wildcardCovers('*.moments.am', '*.moments.am')).toBe(false);
     });
 });

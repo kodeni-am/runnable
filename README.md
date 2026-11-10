@@ -244,6 +244,8 @@ Because a certificate Caddy cannot load fails the reload for every site, Runnabl
 
 After adding the domain, it is still worth running `sudo caddy validate --config /etc/caddy/Caddyfile`.
 
+A user cannot add an exact domain that another project's wildcard covers (for example `anna.example.com` under `*.example.com`), and a wildcard cannot be added while another project owns an exact domain it covers. Both requests fail with a message naming the conflict.
+
 **Rolling back:** remove all wildcard domains before rolling Runnable back to a release without wildcard support. Older releases reject `*.` names when they rebuild the Caddy config, so starting, deploying or reloading that project would fail.
 
 ## Private NPM Registries
