@@ -139,7 +139,7 @@ export class DomainService {
         const domainRepo = AppDataSource.getRepository(CustomDomain);
         const customDomain = await domainRepo.findOne({
             where: { id: domainId, projectId },
-            relations: ['project'],
+            relations: { project: true },
         });
 
         if (!customDomain) {
@@ -185,7 +185,7 @@ export class DomainService {
         const domainRepo = AppDataSource.getRepository(CustomDomain);
         const customDomain = await domainRepo.findOne({
             where: { id: domainId, projectId },
-            relations: ['project'],
+            relations: { project: true },
         });
 
         if (!customDomain) {
@@ -202,7 +202,7 @@ export class DomainService {
         const domainRepo = AppDataSource.getRepository(CustomDomain);
         const customDomain = await domainRepo.findOne({
             where: { id: domainId, projectId },
-            relations: ['project'],
+            relations: { project: true },
         });
 
         if (!customDomain) {
@@ -241,7 +241,7 @@ export class DomainService {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
-            relations: ['customDomains'],
+            relations: { customDomains: true },
         });
 
         if (!project) return;

@@ -122,7 +122,7 @@ export const requireProjectAccess = (...permissions: ProjectPermission[]) => {
             const projectRepo = AppDataSource.getRepository(Project);
             const project = await projectRepo.findOne({
                 where: { id: projectId },
-                relations: ['customDomains', 'githubRepo'],
+                relations: { customDomains: true, githubRepo: true },
             });
 
             if (!project) {

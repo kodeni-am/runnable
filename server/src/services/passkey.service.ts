@@ -133,7 +133,7 @@ export class PasskeyService {
     ): Promise<{ user: User; accessToken: string; refreshToken: string }> {
         const credentialId = (response as any)?.id;
         const cred = typeof credentialId === 'string' && credentialId.length > 0
-            ? await credRepo().findOne({ where: { credentialId }, relations: ['user'] })
+            ? await credRepo().findOne({ where: { credentialId }, relations: { user: true } })
             : null;
         if (!cred) {
             throw new AppError('Invalid credentials', 401);

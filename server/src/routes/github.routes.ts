@@ -27,7 +27,7 @@ router.post('/:id/github/connect', requireProjectAccess(ProjectPermission.CAN_ED
             const projectRepo = AppDataSource.getRepository(Project);
             const loaded = await projectRepo.findOne({
                 where: { id: project.id },
-                relations: ['githubRepo'],
+                relations: { githubRepo: true },
             });
             if (loaded?.githubRepo) project.githubRepo = loaded.githubRepo;
         }
@@ -94,7 +94,7 @@ router.delete('/:id/github/disconnect', requireProjectAccess(ProjectPermission.C
             const projectRepo = AppDataSource.getRepository(Project);
             const loaded = await projectRepo.findOne({
                 where: { id: project.id },
-                relations: ['githubRepo'],
+                relations: { githubRepo: true },
             });
             if (loaded?.githubRepo) project.githubRepo = loaded.githubRepo;
         }

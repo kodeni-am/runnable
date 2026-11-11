@@ -54,7 +54,7 @@ export class PreviewService {
     private static async findPreview(parentProjectId: string, prNumber: number): Promise<Project | null> {
         return AppDataSource.getRepository(Project).findOne({
             where: { parentProjectId, prNumber, isPreview: true },
-            relations: ['githubRepo'],
+            relations: { githubRepo: true },
         });
     }
 
@@ -225,7 +225,7 @@ export class PreviewService {
     static async destroyPreview(parentProjectId: string, previewId: string): Promise<boolean> {
         const preview = await AppDataSource.getRepository(Project).findOne({
             where: { id: previewId, parentProjectId, isPreview: true },
-            relations: ['githubRepo'],
+            relations: { githubRepo: true },
         });
         if (!preview) return false;
         const key = `${parentProjectId}:${preview.prNumber}`;
@@ -241,7 +241,7 @@ export class PreviewService {
     static async reapExpired(nowMs: number): Promise<void> {
         const previews = await AppDataSource.getRepository(Project).find({
             where: { isPreview: true },
-            relations: ['parentProject', 'githubRepo'],
+            relations: { parentProject: true, githubRepo: true },
         });
         for (const preview of previews) {
             const ttl = preview.parentProject?.previewTtlDays ?? 7;

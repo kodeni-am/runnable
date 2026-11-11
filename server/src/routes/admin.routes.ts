@@ -16,7 +16,7 @@ router.get('/users', async (req, res, next: NextFunction) => {
         const userRepo = AppDataSource.getRepository(User);
         const users = await userRepo.find({
             order: { createdAt: 'DESC' },
-            select: ['id', 'email', 'username', 'role', 'isApproved', 'createdAt', 'githubId', 'googleId', 'permissions'],
+            select: { id: true, email: true, username: true, role: true, isApproved: true, createdAt: true, githubId: true, googleId: true, permissions: true },
         });
         res.json(users);
     } catch (error) {

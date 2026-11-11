@@ -106,7 +106,7 @@ export class ProcessService {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
-            relations: ['customDomains'],
+            relations: { customDomains: true },
         });
 
         if (!project) throw new Error('Project not found');
@@ -864,7 +864,7 @@ export class ProcessService {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
-            relations: ['customDomains'],
+            relations: { customDomains: true },
         });
         if (!project) throw new Error('Project not found');
 

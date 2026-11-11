@@ -224,7 +224,7 @@ export class GithubService {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
-            relations: ['githubRepo'],
+            relations: { githubRepo: true },
         });
 
         if (!project || !project.githubRepo) return;
@@ -382,7 +382,7 @@ export class GithubService {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
-            relations: ['githubRepo'],
+            relations: { githubRepo: true },
         });
         if (!project || !project.githubRepo) {
             throw new AppError('No GitHub repo connected to this project', 400);
@@ -463,7 +463,7 @@ export class GithubService {
         const projectRepo = AppDataSource.getRepository(Project);
         const project = await projectRepo.findOne({
             where: { id: projectId },
-            relations: ['githubRepo'],
+            relations: { githubRepo: true },
         });
         if (!project) throw new AppError('Project not found', 404);
         if (!project.githubRepo) throw new AppError('No GitHub repo connected to this project', 400);
@@ -505,7 +505,7 @@ export class GithubService {
                 // a concurrent deploy and is safe to keep using as loaded.
                 const freshProject = await projectRepo.findOne({
                     where: { id: projectId },
-                    select: ['status'],
+                    select: { status: true },
                 });
 
                 if (!opts.force && localSha && localSha === remoteSha && freshProject?.status === ServiceStatus.RUNNING) {

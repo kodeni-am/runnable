@@ -95,7 +95,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
         // Owned projects
         const ownedProjects = await projectRepo.find({
             where: { userId: req.user!.id, isPreview: false },
-            relations: ['githubRepo', 'customDomains'],
+            relations: { githubRepo: true, customDomains: true },
             order: { createdAt: 'DESC' },
         });
 
@@ -103,7 +103,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
         const collabRepo = AppDataSource.getRepository(ProjectCollaborator);
         const collaborations = await collabRepo.find({
             where: { userId: req.user!.id },
-            relations: ['project', 'project.githubRepo', 'project.customDomains'],
+            relations: { project: { githubRepo: true, customDomains: true } },
         });
         const sharedProjects = collaborations
             .map(c => ({ ...c.project, _isCollaborator: true, _permissions: c.permissions }))
@@ -617,7 +617,7 @@ router.get('/:id/collaborators', requireProjectAccess(), async (req: AuthRequest
         const collabRepo = AppDataSource.getRepository(ProjectCollaborator);
         const collaborators = await collabRepo.find({
             where: { projectId: project.id },
-            relations: ['user'],
+            relations: { user: true },
         });
 
         res.json(collaborators.map(c => ({
@@ -712,7 +712,7 @@ router.put('/:id/collaborators/:userId', requireProjectAccess(), async (req: Aut
         const collabRepo = AppDataSource.getRepository(ProjectCollaborator);
         const collab = await collabRepo.findOne({
             where: { userId: req.params.userId as string, projectId: project.id },
-            relations: ['user'],
+            relations: { user: true },
         });
 
         if (!collab) {

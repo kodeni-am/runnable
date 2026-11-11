@@ -122,7 +122,7 @@ export class PortReconcilerService {
             const projectRepo = AppDataSource.getRepository(Project);
             const projects = await projectRepo.find({
                 where: { status: ServiceStatus.RUNNING, serverType: ServerType.APP },
-                relations: ['customDomains'],
+                relations: { customDomains: true },
             });
 
             let repaired = 0;
@@ -171,7 +171,7 @@ export class PortReconcilerService {
         // a deploy or a stop may have started in the meantime.
         const fresh = await projectRepo.findOne({
             where: { id: project.id },
-            relations: ['customDomains'],
+            relations: { customDomains: true },
         });
         if (!fresh || fresh.status !== ServiceStatus.RUNNING) return false;
         if (ProcessService.isBusy(project.id)) return false;
