@@ -4,10 +4,13 @@ import { AppDataSource } from '../config/data-source';
 import { GithubRepo, Project, ServiceStatus, Deployment } from '../entities';
 import type { DeploymentStatus, DeploymentTrigger, DeployStrategyValue, HealthGateValue } from '../entities/Deployment';
 import { ProcessService } from './process.service';
-import { DeployError } from './deployError';
+import { DeployError, deployLogOf, deployLogTail } from './deployError';
 import { NotificationService } from './notification.service';
 import { AppError } from '../middleware/errorHandler';
 import { config } from '../config';
+
+/** Per project, only the newest deployments keep their log. */
+const DEPLOY_LOGS_KEPT = 20;
 
 /** Notification wording for a failed deploy, by kind. */
 const FAILURE_COPY = {
@@ -276,6 +279,7 @@ export class GithubService {
                     durationMs: result.durationMs,
                     healthGate: result.healthGate,
                     strategyReason: result.strategyReason,
+                    log: result.log,
                 });
                 await NotificationService.notify(project, {
                     event: 'deploy.success',
@@ -309,10 +313,29 @@ export class GithubService {
         durationMs?: number;
         healthGate?: HealthGateValue;
         strategyReason?: string;
+        /** Build/deploy log snapshot; see ProcessService.captureDeployLog. */
+        log?: string;
     }): Promise<Deployment> {
         const deployRepo = AppDataSource.getRepository(Deployment);
         const deployment = deployRepo.create({ projectId, ...data });
-        return deployRepo.save(deployment);
+        const saved = await deployRepo.save(deployment);
+
+        // Logs are large; history rows are not. Keep logs on the newest rows only.
+        if (data.log) {
+            await Promise.resolve().then(() => deployRepo.query(
+                `UPDATE "deployments" SET "log" = NULL
+                 WHERE "projectId" = $1 AND "log" IS NOT NULL AND "id" NOT IN (
+                     SELECT "id" FROM "deployments" WHERE "projectId" = $1
+                     ORDER BY "createdAt" DESC LIMIT ${DEPLOY_LOGS_KEPT}
+                 )`,
+                [projectId],
+            )).catch(() => { });
+        }
+
+        // Callers hand this row to API responses — the log is served by its
+        // own endpoint, never inline.
+        saved.log = undefined;
+        return saved;
     }
 
     /**
@@ -331,6 +354,9 @@ export class GithubService {
     ): Promise<boolean> {
         const copy = FAILURE_COPY[opts.kind];
         const stillServing = error instanceof DeployError && error.stillServing;
+        const log = deployLogOf(error);
+        const tail = deployLogTail(log);
+        const reason = error?.message || copy.fallback;
 
         await AppDataSource.getRepository(Project).update(project.id, {
             status: stillServing ? ServiceStatus.RUNNING : ServiceStatus.ERROR,
@@ -346,14 +372,14 @@ export class GithubService {
             error: error?.message,
             stillServing,
             strategy: error instanceof DeployError ? error.strategy : undefined,
+            log,
         }).catch(() => { });
 
         await NotificationService.notify(project, {
             event: copy.event,
             title: copy.title(project.name),
-            message: stillServing
-                ? `${error?.message || copy.fallback} — ${copy.keptServing}`
-                : error?.message || copy.fallback,
+            message: (stillServing ? `${reason} — ${copy.keptServing}` : reason)
+                + (tail ? `\n\nLast log lines:\n${tail}` : ''),
             success: false,
             meta: { branch: opts.branch, commit: opts.commitSha?.slice(0, 7) },
         });
@@ -422,6 +448,7 @@ export class GithubService {
                 durationMs: result.durationMs,
                 healthGate: result.healthGate,
                 strategyReason: result.strategyReason,
+                log: result.log,
             });
             await NotificationService.notify(project, {
                 event: 'rollback.success',
@@ -567,6 +594,7 @@ export class GithubService {
                 durationMs: result.durationMs,
                 healthGate: result.healthGate,
                 strategyReason: result.strategyReason,
+                log: result.log,
             });
             await NotificationService.notify(project, {
                 event: 'deploy.success',

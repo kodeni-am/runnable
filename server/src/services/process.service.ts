@@ -17,7 +17,7 @@ import {
     containerGenerations, nextContainerGeneration,
     composeGenerations, nextComposeGeneration,
 } from './deployNames';
-import { DeployError, DeployStrategy, HealthGateResult, DeployPhase } from './deployError';
+import { capDeployLog, DeployError, DeployStrategy, HealthGateResult, DeployPhase } from './deployError';
 import { HealthMonitorService } from './healthMonitor.service';
 import { buildNpmrcContent, maskToken, NPMRC_SENTINEL } from './npmrc';
 import { decryptSecret } from './crypto.service';
@@ -58,6 +58,8 @@ export interface RedeployResult {
     healthGate?: HealthGateResult;
     strategyReason?: string;
     durationMs?: number;
+    /** The build/deploy log this run wrote, when it wrote one. */
+    log?: string;
 }
 
 export class ProcessService {
@@ -250,6 +252,48 @@ export class ProcessService {
     private static buildLogPathFor(project: Project): string {
         const storageDir = path.resolve(config.hosting.servDir, '..');
         return path.join(storageDir, 'logs', `${project.subdomain}-build.log`);
+    }
+
+    /**
+     * The build log, if a build or deploy wrote to it at or after `sinceMs`.
+     * The file is per project and overwritten by the next run, so callers
+     * snapshot it onto the Deployment row. The mtime guard keeps a run that
+     * never reached the build (or a static project, which has no build) from
+     * being handed the previous run's log.
+     */
+    static async captureDeployLog(project: Project, sinceMs: number): Promise<string | undefined> {
+        try {
+            const buildLogPath = ProcessService.buildLogPathFor(project);
+            const stat = await fs.stat(buildLogPath);
+            // 2s of slack: some filesystems round mtime down to the second.
+            if (stat.mtimeMs < sinceMs - 2000) return undefined;
+            return capDeployLog(await fs.readFile(buildLogPath, 'utf-8'));
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Append a container's (or compose stack's) last output to the build log.
+     * Called before a failed blue-green generation is removed — afterwards
+     * the reason it died is gone for good. Best-effort.
+     */
+    private static async appendWorkloadOutput(
+        project: Project,
+        buildLogPath: string,
+        target: { container: string } | { composeProject: string; composeFile: string },
+    ): Promise<void> {
+        try {
+            const result = 'container' in target
+                ? await SandboxService.exec(project.id, 'docker', ['logs', '--tail', '100', target.container])
+                : await SandboxService.exec(project.id, 'docker',
+                    ['compose', '-p', target.composeProject, '-f', target.composeFile,
+                        'logs', '--tail', '100', '--no-color'],
+                    project.directoryPath);
+            const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+            await fs.appendFile(buildLogPath,
+                `\n--- Output of the new version before it was removed ---\n${output || '(no output)'}\n`);
+        } catch { /* best-effort */ }
     }
 
     private static async logAndCheck(
@@ -809,6 +853,7 @@ export class ProcessService {
         stillAlive: () => Promise<boolean>,
         buildLogPath: string,
         strategy: DeployStrategy,
+        target: { container: string } | { composeProject: string; composeFile: string },
     ): Promise<HealthGateResult> {
         ProcessService.emitDeployProgress(project.id, 'health-check', strategy);
         const deadline = Date.now() + HEALTH_GATE_TIMEOUT_MS;
@@ -818,6 +863,7 @@ export class ProcessService {
                 return 'passed';
             }
             if (!(await stillAlive())) {
+                await ProcessService.appendWorkloadOutput(project, buildLogPath, target);
                 throw new Error('New container exited before responding to HTTP');
             }
             await new Promise(r => setTimeout(r, HEALTH_PROBE_INTERVAL_MS));
@@ -984,7 +1030,7 @@ export class ProcessService {
                         ['inspect', '--format', '{{.State.Status}}', incoming]);
                     return s.stdout.trim() === 'running';
                 },
-                buildLogPath, 'blue-green');
+                buildLogPath, 'blue-green', { container: incoming });
 
             ProcessService.emitDeployProgress(project.id, 'switching', 'blue-green');
             const configPath = await ProcessService.switchProxy(project, hostPort, oldPort);
@@ -1056,7 +1102,7 @@ export class ProcessService {
                         ['ps', '-q', '--filter', `label=com.docker.compose.project=${incoming}`]);
                     return ps.stdout.trim().length > 0;
                 },
-                buildLogPath, 'blue-green');
+                buildLogPath, 'blue-green', { composeProject: incoming, composeFile });
 
             ProcessService.emitDeployProgress(project.id, 'switching', 'blue-green');
             const configPath = await ProcessService.switchProxy(project, hostPort, oldPort);
@@ -1237,9 +1283,10 @@ export class ProcessService {
      */
     private static async deployOrRecreate(projectId: string): Promise<Omit<RedeployResult, 'ran'>> {
         const startedAt = Date.now();
+        let project: Project | null = null;
         try {
             const projectRepo = AppDataSource.getRepository(Project);
-            const project = await projectRepo.findOne({ where: { id: projectId } });
+            project = await projectRepo.findOne({ where: { id: projectId } });
             const eligible = !!project
                 && project.serverType === ServerType.APP
                 && project.zeroDowntime
@@ -1258,8 +1305,14 @@ export class ProcessService {
             ProcessService.emitDeployFinished(projectId, {
                 outcome: 'success', strategy: outcome.strategy, durationMs, healthGate: outcome.healthGate,
             });
-            return { ...outcome, durationMs };
+            const log = project ? await ProcessService.captureDeployLog(project, startedAt) : undefined;
+            return { ...outcome, durationMs, log };
         } catch (err: any) {
+            // Snapshot the log onto the error while we still hold the project
+            // lock — the next deploy overwrites the file.
+            if (project && err && typeof err === 'object') {
+                err.deployLog = await ProcessService.captureDeployLog(project, startedAt);
+            }
             const stillServing = err instanceof DeployError && err.stillServing;
             ProcessService.emitDeployFinished(projectId, {
                 outcome: stillServing ? 'failed-still-serving' : 'failed-down',

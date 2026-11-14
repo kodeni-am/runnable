@@ -3,7 +3,7 @@ import { Project, GithubRepo, ServiceStatus, ServerType, User } from '../entitie
 import { ProjectProvisioningService } from './projectProvisioning.service';
 import { ProjectTeardownService } from './projectTeardown.service';
 import { ProcessService } from './process.service';
-import { DeployError } from './deployError';
+import { DeployError, deployLogOf } from './deployError';
 import { GithubService } from './github.service';
 import { NotificationService } from './notification.service';
 import { isForkPR, derivePreviewSubdomain, mergePreviewEnv, previewHostname, isPreviewExpired, type PullRequestInfo } from './preview.helpers';
@@ -128,6 +128,7 @@ export class PreviewService {
         const token = owner.githubToken || undefined;
         await AppDataSource.getRepository(Project).update(preview.id, { status: ServiceStatus.DEPLOYING });
 
+        const startedAt = Date.now();
         try {
             await GithubService.cloneRepo(preview.id, parent.githubRepo.repoUrl, preview.directoryPath, pr.head.ref, token);
             await ProcessService.start(preview.id);
@@ -135,6 +136,7 @@ export class PreviewService {
             await GithubService.recordDeployment(preview.id, {
                 status: 'success', trigger: 'webhook', branch: pr.head.ref,
                 commitMessage: `Preview for PR #${pr.number}`,
+                log: await ProcessService.captureDeployLog(preview, startedAt),
             });
             await NotificationService.notify(preview, {
                 event: 'preview.deployed',
@@ -148,6 +150,7 @@ export class PreviewService {
             await GithubService.recordDeployment(preview.id, {
                 status: 'failed', trigger: 'webhook', branch: pr.head.ref,
                 error: error?.message,
+                log: await ProcessService.captureDeployLog(preview, startedAt),
             }).catch(() => { });
             await NotificationService.notify(preview, {
                 event: 'preview.failed',
@@ -174,6 +177,7 @@ export class PreviewService {
                     durationMs: result.durationMs,
                     healthGate: result.healthGate,
                     strategyReason: result.strategyReason,
+                    log: result.log,
                 });
             }
         } catch (error: any) {
@@ -188,6 +192,7 @@ export class PreviewService {
                 status: 'failed', trigger: 'webhook', branch: pr.head.ref, error: error?.message,
                 stillServing,
                 strategy: error instanceof DeployError ? error.strategy : undefined,
+                log: deployLogOf(error),
             }).catch(() => { });
             await NotificationService.notify(preview, {
                 event: 'preview.failed',

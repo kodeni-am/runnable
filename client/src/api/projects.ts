@@ -113,6 +113,8 @@ export interface Deployment {
     durationMs?: number | null;
     healthGate?: 'passed' | 'degraded' | null;
     strategyReason?: string | null;
+    /** Whether the build/deploy log of this deployment is still kept. */
+    hasLog?: boolean;
     createdAt: string;
 }
 
@@ -166,6 +168,8 @@ export const projectsApi = {
 
     // Deployments
     listDeployments: (id: string) => api.get<Deployment[]>(`/projects/${id}/deployments`),
+    deploymentLog: (id: string, deploymentId: string) =>
+        api.get<{ logs: string[] }>(`/projects/${id}/deployments/${deploymentId}/log`),
     rollbackDeployment: (id: string, deploymentId: string) =>
         api.post<Deployment>(`/projects/${id}/deployments/${deploymentId}/rollback`),
     listPreviews: (id: string) => api.get<Project[]>(`/projects/${id}/previews`),

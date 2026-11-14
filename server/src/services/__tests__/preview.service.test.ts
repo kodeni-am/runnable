@@ -18,7 +18,7 @@ vi.mock('../projectTeardown.service', () => ({
 }));
 const loadRegistryToken = vi.fn(async (_projectId: string): Promise<string | null> => null);
 vi.mock('../process.service', () => ({
-    ProcessService: { start: vi.fn(), redeploy: vi.fn(async () => true), loadRegistryToken: (id: string) => loadRegistryToken(id) },
+    ProcessService: { start: vi.fn(), redeploy: vi.fn(async () => true), captureDeployLog: vi.fn(async () => undefined), loadRegistryToken: (id: string) => loadRegistryToken(id) },
 }));
 vi.mock('../github.service', () => ({
     GithubService: { cloneRepo: vi.fn(), pullLatest: vi.fn(), recordDeployment: vi.fn() },

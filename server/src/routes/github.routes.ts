@@ -1,4 +1,5 @@
 import { Router, Response, NextFunction } from 'express';
+import { IsNull, Not } from 'typeorm';
 import { AppDataSource } from '../config/data-source';
 import { Project, GithubRepo, User, Deployment } from '../entities';
 import { ProjectPermission } from '../entities/enums';
@@ -141,7 +142,32 @@ router.get('/:id/deployments', requireProjectAccess(ProjectPermission.CAN_VIEW_G
             order: { createdAt: 'DESC' },
             take: 50,
         });
-        res.json(deployments);
+        // The log column is not selected above; just flag which rows have one.
+        const withLog = await AppDataSource.getRepository(Deployment).find({
+            where: { projectId: project.id, log: Not(IsNull()) },
+            select: { id: true },
+        });
+        const hasLog = new Set(withLog.map(d => d.id));
+        res.json(deployments.map(d => ({ ...d, hasLog: hasLog.has(d.id) })));
+    } catch (error) {
+        next(error);
+    }
+});
+
+// The build/deploy log captured when a deployment finished
+router.get('/:id/deployments/:deploymentId/log', requireProjectAccess(ProjectPermission.CAN_VIEW_LOGS), async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const project = (req as any).project as Project;
+        const deployment = await AppDataSource.getRepository(Deployment).findOne({
+            where: { id: req.params.deploymentId as string, projectId: project.id },
+            select: { id: true, log: true },
+        });
+        if (!deployment) throw new AppError('Deployment not found', 404);
+        res.json({
+            logs: deployment.log
+                ? deployment.log.split('\n')
+                : ['No log was kept for this deployment.'],
+        });
     } catch (error) {
         next(error);
     }

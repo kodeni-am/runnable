@@ -63,6 +63,15 @@ export class Deployment {
     @Column({ type: 'text', nullable: true })
     strategyReason?: string;
 
+    /**
+     * The build/deploy log captured when this deployment finished. Not
+     * selected by default (it can be hundreds of KB) — read it explicitly.
+     * Cleared on all but the newest rows per project; see
+     * GithubService.recordDeployment.
+     */
+    @Column({ type: 'text', nullable: true, select: false })
+    log?: string | null;
+
     @CreateDateColumn()
     createdAt: Date;
 }

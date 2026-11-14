@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../store/projectStore';
 import { projectsApi, type Project, type Collaborator, type ProjectPermissions, type Deployment } from '../api/projects';
@@ -7,14 +7,24 @@ import Layout from '../components/Layout';
 import StatusBadge from '../components/StatusBadge';
 import FileBrowser from '../components/FileBrowser';
 import LogViewer from '../components/LogViewer';
+import LogConsole from '../components/LogConsole';
 import ContainersViewer from '../components/ContainersViewer';
 import DeployActivityCard from '../components/DeployActivityCard';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProjectSocket } from '../hooks/useProjectSocket';
 import {
     ArrowLeft, Play, Square, RotateCcw, Trash2, Globe,
-    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus, RefreshCw, Hammer
+    FolderGit2, Plus, CheckCircle2, XCircle, ExternalLink, Link, Edit, Users, UserPlus, RefreshCw, Hammer, ScrollText
 } from 'lucide-react';
+
+/** The stored log of one past deployment. A component so fetchLogs stays stable across page re-renders. */
+function DeploymentLog({ projectId, deploymentId }: { projectId: string; deploymentId: string }) {
+    const fetchLogs = useCallback(
+        async () => (await projectsApi.deploymentLog(projectId, deploymentId)).data.logs,
+        [projectId, deploymentId],
+    );
+    return <LogConsole title="Deploy log" fetchLogs={fetchLogs} defaultLive={false} />;
+}
 
 const DEFAULT_COLLAB_PERMS: ProjectPermissions = {
     canStart: false,
@@ -61,6 +71,7 @@ export default function ProjectDetail() {
     // Deployment history state
     const [deployments, setDeployments] = useState<Deployment[]>([]);
     const [deploymentsLoading, setDeploymentsLoading] = useState(false);
+    const [openDeployLog, setOpenDeployLog] = useState<string | null>(null);
     const [rollbackLoading, setRollbackLoading] = useState('');
     const [deploymentsError, setDeploymentsError] = useState('');
     const [syncing, setSyncing] = useState(false);
@@ -770,7 +781,8 @@ export default function ProjectDetail() {
                                 {/* With zero-downtime deploys "latest failed, older still serving"
                                     is common — Current is the first SUCCESSFUL row, not row 0 */}
                                 {deployments.map((d, index) => (
-                                    <div key={d.id} className="glass" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', borderRadius: 10 }}>
+                                    <div key={d.id} className="glass" style={{ padding: '14px 18px', borderRadius: 10 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                                         {d.status === 'success'
                                             ? <CheckCircle2 size={20} style={{ color: 'var(--status-success, #46a758)', flexShrink: 0 }} />
                                             : <XCircle size={20} style={{ color: 'var(--status-error, #e5484d)', flexShrink: 0 }} />}
@@ -823,7 +835,20 @@ export default function ProjectDetail() {
                                                     : `${Math.round(d.durationMs / 1000)}s`}` : ''}
                                                 {' · '}{new Date(d.createdAt).toLocaleString()}
                                             </div>
+                                            {d.status === 'failed' && d.error && (
+                                                <div style={{ fontSize: 12, marginTop: 6, color: 'var(--status-error, #e5484d)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 96, overflowY: 'auto' }}>
+                                                    {d.error}
+                                                </div>
+                                            )}
                                         </div>
+                                        {canViewLogs && d.hasLog && (
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={() => setOpenDeployLog(openDeployLog === d.id ? null : d.id)}
+                                            >
+                                                <ScrollText size={14} /> {openDeployLog === d.id ? 'Hide log' : 'View log'}
+                                            </button>
+                                        )}
                                         {canStart && d.commitSha && d.status === 'success' && index !== 0 && (
                                             <button
                                                 className="btn btn-secondary"
@@ -833,6 +858,12 @@ export default function ProjectDetail() {
                                                 {rollbackLoading === d.id ? <span className="spinner" /> : <RotateCcw size={14} />} Roll back
                                             </button>
                                         )}
+                                    </div>
+                                    {openDeployLog === d.id && (
+                                        <div className="deploy-card-log" style={{ marginTop: 12 }}>
+                                            <DeploymentLog projectId={id!} deploymentId={d.id} />
+                                        </div>
+                                    )}
                                     </div>
                                 ))}
                             </div>

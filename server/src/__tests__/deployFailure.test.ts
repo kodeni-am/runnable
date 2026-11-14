@@ -78,6 +78,28 @@ describe('GithubService.recordDeployFailure', () => {
         }));
     });
 
+    it('stores the deploy log and puts its last lines in the notification', async () => {
+        deployRepo.query = vi.fn(async () => undefined);
+        const err: any = new DeployError('Railpack build failed with exit code 1', true, 'blue-green');
+        err.deployLog = 'Building…\nnpm ERR! missing script: build\n\n❌ Deploy failed: Railpack build failed with exit code 1\n';
+
+        await call({ kind: 'deploy', trigger: 'webhook', branch: 'main' }, err);
+
+        expect(deployRepo.create).toHaveBeenCalledWith(expect.objectContaining({ log: err.deployLog }));
+        // Older rows of this project lose their log
+        expect(deployRepo.query).toHaveBeenCalledWith(expect.stringContaining('SET "log" = NULL'), ['proj-1']);
+        const message = vi.mocked(NotificationService.notify).mock.calls[0][1].message;
+        expect(message).toContain('Last log lines:\nBuilding…\nnpm ERR! missing script: build');
+        expect(message).not.toContain('❌');
+    });
+
+    it('adds no log section when the deploy never reached the build', async () => {
+        await call({ kind: 'deploy', trigger: 'webhook', branch: 'main' }, new Error('Git pull failed'));
+
+        const message = vi.mocked(NotificationService.notify).mock.calls[0][1].message;
+        expect(message).toBe('Git pull failed');
+    });
+
     it('does not throw when recording the deployment row fails', async () => {
         deployRepo.save = vi.fn(async () => { throw new Error('db down'); });
 
